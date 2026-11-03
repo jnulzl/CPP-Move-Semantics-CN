@@ -85,7 +85,7 @@ xelatex -shell-escape -interaction=nonstopmode -synctex=1 main.tex   # 跑三遍
 
 ---
 
-> 如果环境配置遇到问题或者编译失败，可直接到[ releases](https://github.com/jnulzl/C++ Move Semantics-CN/releases)下载最新的 pdf 文件。
+> 如果环境配置遇到问题或者编译失败，可直接到[ releases](https://github.com/jnulzl/CPP-Move-Semantics-CN/releases)下载最新的 pdf 文件。
 
 ---
 
