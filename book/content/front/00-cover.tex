@@ -1,0 +1,14 @@
+% =============================================================================
+%  原书封面 —— 工程根的 cover.png，满版整页
+%  · 图片按 paper 尺寸铺满（原图 1122×1385，与本页比例差约 4%，拉伸肉眼无感）
+% =============================================================================
+\thispagestyle{empty}
+
+\begin{tikzpicture}[remember picture, overlay]
+  \node[inner sep=0pt, anchor=north west]
+    at (current page.north west)
+    {\includegraphics[width=\paperwidth, height=\paperheight]{images/cover.png}};
+\end{tikzpicture}
+
+\null
+\clearpage

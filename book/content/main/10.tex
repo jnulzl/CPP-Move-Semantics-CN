@@ -1,0 +1,815 @@
+% 第 10 章 完美转发的细节（由 tools/convert.py 从原 content/ 自动生成，勿手改）
+
+前一章介绍了(完美)转发和通用/转发引用之后，本章会来介绍完美转发和通用/转发引用的细节，例如:\par
+
+\begin{itemize}
+  \item 非转发的通用引用
+  \item 通用引用
+  \item 通用引用的类型推导
+\end{itemize}
+
+接下来的章节将讨论如何处理泛型代码中，可能有或没有移动语义的返回值。\par
+
+
+\section{通用引用作为非转发引用}
+
+有一些通用引用(也称为转发引用)的应用与转发无关，因为可以绑定所有对象，同时仍然知道值的类别和/或对象是否为\textit{const}。\par
+
+本章中，将讨论一些例子。介绍了第二种通用引用auto\&\&之后，将讨论使用通用引用作为非转发引用的实际示例。\par
+
+\mySmallsection{10.1.1 通用引用和\textit{const}}
+
+根据绑定引用的正式规则，通用引用是将引用绑定到任何值类别的对象，并需要保持其为\textit{const}的唯一方法。另一个绑定到所有对象的引用是\textit{const}\&，但丢失了传递参数是否为\textit{const}的信息。\par
+
+\mySmallsection{转发常量}
+
+如果想避免重载，但又希望对\textit{const}和非\textit{const}参数有不同的行为，并支持所有值类别，就必须使用通用引用。\par
+
+考虑以下代码:\par
+
+\begin{codeboxt}[cpp]{generic/universalconst.cpp}
+#include <iostream>
+#include <string>
+
+void iterate(std::string::iterator beg, std::string::iterator end)
+{
+  std::cout << "do some non-const stuff with the passed range\n";
+}
+
+void iterate(std::string::const_iterator beg, std::string::const_iterator end)
+{
+  std::cout << "do some const stuff with the passed range\n";
+}
+
+template<typename T>
+void process(T&& coll)
+{
+  iterate(coll.begin(), coll.end());
+}
+
+int main()
+{
+  std::string v{"v"};
+  const std::string c{"c"};
+
+  process(v); // coll binds to a non-const lvalue, iterators passed
+  process(c); // coll binds to a const lvalue, const_iterators passed
+  process(std::string{"t"}); // coll binds to a non-const prvalue, iterators passed
+  process(std::move(v)); // coll binds to a non-const xvalue, iterators passed
+  process(std::move(c)); // coll binds to a const xvalue , const_iterators passed
+}
+\end{codeboxt}
+
+该程序有以下输出:\par
+
+\begin{myOutput}
+do some non-const stuff with the passed range \\
+do some const stuff with the passed range \\
+do some non-const stuff with the passed range \\
+do some non-const stuff with the passed range \\
+do some const stuff with the passed range
+\end{myOutput}
+
+代码中，用一个形参声明\textit{process()}作为对集合(容器、字符串等)的通用引用。与通用引用一样，可以传递所有可能值类别的字符串。\par
+
+\textit{process()}内部，可以根据实参是否为\textit{const}，有不同的行为。本例中，调用\textit{begin()}和\textit{end()}来传递传递的集合，将它们作为一个半开范围传递给遍历所有元素的函数:\par
+
+\begin{codebox}[cpp]
+  template<typename T>
+  void process(T&& coll)
+  {
+    iterate(coll.begin(), coll.end());
+  }
+\end{codebox}
+
+但这里调用了\textit{iterate()}函数的不同实现:一个用于\textit{iterator}(能够修改元素)，另一个用于\textit{const\_\allowbreak{}iterator}(不能修改元素)。通用引用保留了传递的\textit{const}对象，所以调用与传递集合匹配的\textit{iterate()}。\par
+
+注意，\textit{process()}内部没有使用(完美)转发。只想通用引用\textit{const}和非\textit{const}对象，甚至可以遍历所有元素后使用\textit{coll}。\par
+
+您可能会认为，应该知道在迭代元素时是否修改了它们。假设这个泛型函数允许为每个元素调用进行操作，则可以读取或修改元素，因此\textit{const}的正确性非常重要。\par
+
+注意，这里使用\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}是有问题的:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void process(T&& coll)
+{
+  iterate(std::forward<T>(coll).begin(), std::forward<T>(coll).end()); // ???
+}
+\end{codebox}
+
+在两个不同的位置，声明不再需要同一对象是一切麻烦的起源，因为两个位置都可能将此解释为从对象中窃取值的原因。因此，窃取\textit{last}的位置可能没有获得正确的值。对于同一个对象，永远不要使用\textit{std::move()}或\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}两次(除非该对象在第二次使用之前重新初始化)。\par
+
+这里只使用\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}一次也是麻烦，因为不保证函数调用参数的求值顺序:\par
+
+\begin{codebox}[cpp]
+  template<typename T>
+  void process(T&& coll)
+  {
+    iterate(coll.begin(), std::forward<T>(coll).end()); // ???
+  }
+\end{codebox}
+
+这个特定的例子中，使用\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}一次或两次可能有效，因为\textit{begin()}和\textit{end()}不会从传递的对象中窃取/修改值。但是，除非确切地知道如何使用这些信息，否则就是错误。\par
+
+\mySmallsection{10.1.2 通用引用的细节}
+
+前面的示例演示了将参数声明为通用引用比将其完全转发给另一个函数更有用。进一步分析一下。\par
+
+考虑以下声明:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void foo(T&& arg) {
+  ...
+}
+\end{codebox}
+
+当声明\textit{arg}时，有一个引用，可以统一地绑定到所有类型和值类别。对于非\textit{const}对象\textit{v}和\textit{const}对象\textit{c}，类型T和参数类型推导如下:\par
+
+\begin{center}
+  \begin{tabular}{lll}
+	\toprule
+    & T            & arg            \\
+	\midrule
+    foo(v)        & Type\&       & Type\&         \\
+    foo(c)        & const Type\& & const Type\&   \\
+    foo(Type\{\}) & Type         & Type\&\&       \\
+    foo(move(v))  & Type         & Type\&\&       \\
+    foo(move(c))  & const Type   & cosnt Type\&\&
+  \end{tabular}
+\end{center}
+
+关于传递的参数的信息拆分如下:\par
+
+\begin{itemize}
+  \item \textit{arg}知道值及其类型，包括是否为\textit{const}。如果传递了lvalue，则为lvalue引用;如果传递了rvalue，则为rvalue引用。
+  \item \textit{T}类型拥有关于传递参数的值类别的一些信息(是传递lvalue还是rvalue)。根据特定模板类型的推导规则，如果传递了一个lvalue，T就是一个lvalue引用;否则，T不是一个引用。
+\end{itemize}
+
+调用\textit{std::\allowbreak{}forward<\allowbreak{}t>(\allowbreak{}arg)\allowbreak{}}将所有信息再次集合在一起，以恢复常量和值类别，以完美地转发传递的参数及其当前值。但是，如果不需要传递参数的值类别来实现完美转发，则不需要\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}。\par
+
+\mySmallsection{依赖常量的代码}
+
+如果只需要知道传递的参数是否为\textit{const}，可以同时使用\textit{arg}和\textit{t}:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void foo(T&& arg)
+{
+  if constexpr(std::is_const_v<std::remove_reference_t<T>>) {
+    ... // passed argument is const
+  }
+  else {
+    ... // passed argument is not const
+  }
+}
+\end{codebox}
+
+这里，我们使用if constexpr (C++17引入的编译时if)根据传递的实参是否为\textit{const}来执行不同的操作。\par
+
+注意，在检查T的一致性之前，使用\textit{std::\allowbreak{}remove\_\allowbreak{}reference<\allowbreak{}>}来删除对T的引用是很重要的。\textit{const}类型的引用不是整体的\textit{const}:\par
+
+\begin{codebox}[cpp]
+std::is_const_v<int> // false
+std::is_const_v<const int> // true
+std::is_const_v<const int&> // false
+std::is_const_v<std::remove_reference_t<const int&>> // true
+\end{codebox}
+
+说些大家不知道的:\par
+
+\begin{itemize}
+  \item std::remove\_reference\_t<T> (自C++14可用)是std::remove\_reference<T>::type的缩写。
+  \item std::is\_const\_v<T> (自C++17可用)是std::is\_const<T>::value的缩写。
+\end{itemize}
+
+\mySmallsection{依赖值类别的代码}
+
+通过使用T，可以获得/检查关于传递的值类别的信息(至少是传递了lvalue还是rvalue)。例如:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void foo(T&& arg)
+{
+  if constexpr(std::is_lvalue_reference_t<T>) {
+    ... // passed argument is lvalue (has no move semantics)
+  }
+  else {
+    ... // passed argument is rvalue (has move semantics)
+  }
+}
+\end{codebox}
+
+有时这样的检查是必要的(例如，根据传递的是lvalue还是rvalue来不同地处理子对象)。\par
+
+\mySmallsection{10.1.3 特定类型的通用引用}
+
+普通rvalue引用和通用引用共享相同的语法，这会导致了多个问题。不仅不能确定有什么，还不能声明特定类型的通用引用。\par
+
+例如，声明为使用通用引用的函数:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void processString(T&& arg);
+\end{codebox}
+
+%根据这个声明，arg可以有任何类型。这个函数可以调用该模板支持操作对的所有参数。\par
+
+希望将该函数限制为只接受字符串(\textit{const}和非\textit{const}都可以，且不丢失信息)，但并非轻易就能做到。\par
+
+因为C++20，用关键字\textit{require}来约束对特定类型的通用引用成为可能。但是，必须确定是否支持，以及支持哪种类型的类型转换:\par
+
+\begin{itemize}
+  \item 当类型必须匹配时(不允许隐式转换):\par
+\begin{codebox}[cpp]
+    template<typename T>
+    requires std::is_same_v<std::remove_cvref_t<T>, std::string>
+    void processString(T&&) {
+      ...
+    }
+\end{codebox}
+  \item 允许隐式转换:\par
+\begin{codebox}[cpp]
+  template<typename T>
+  requires std::is_convertible_v<T, std::string>
+  void processString(T&&) {
+    ...
+  }
+\end{codebox}
+  \item 允许显式转换:
+\begin{codebox}[cpp]
+  template<typename T>
+  requires std::is_constructible_v<std::string, T>
+  void processString(T&&) {
+    ...
+  }
+\end{codebox}
+\end{itemize}
+
+通常，std::is\_convertible是期望的，因为符合函数调用的通常规则。注意，std::is\_convertible和std::is\_constructible的转换顺序与源类型和目标类型相反。\par
+
+请参考generic/universaltype.cpp以获得所有情况的完整示例。\par
+
+C++20之前，需要enable\_if<>类型特征，而不是require，并且不支持类型特征带有\_v和\_t后缀的缩写形式。例如，以下代码支持(自C++11起)隐式转换为std::string的所有类型:\par
+
+\begin{codebox}[cpp]
+template<typename T,
+typename = typename std::enable_if<
+std::is_convertible<T, std::string>::value
+>::type>
+
+void processString(T&& args);
+\end{codebox}
+
+要在C++11中限制为std::string类型，我们需要:\par
+
+\begin{codebox}[cpp]
+template<typename T,
+typename = typename std::enable_if<
+std::is_same<typename std::decay<T>::type,
+        std::string
+      >::value
+    >::type>
+
+void processString(T&& arg);
+\end{codebox}
+
+这里，类型trait std::\allowbreak{}decay<\allowbreak{}>用于从类型T中移除引用和一致性(类型trait std::remove\_cvref<>在C++20后可用)。\par
+
+以类似的方式，可以约束泛型代码，让通用引用只绑定到rvalue。但是，如果有通用引用的特定语法，那么这些都不需要。例如:\par
+
+\begin{codebox}[cpp]
+void processString(std::string&&& arg); // assume &&& declares a universal reference
+\end{codebox}
+
+但是，现在没有这种语法，现在两个程序都使用的是\&\&。\par
+
+
+\section{通用或普通rvalue引用?}
+
+对普通rvalue引用和通用/转发引用使用相同的语法，这为对象是普通rvalue引用还是通用引用带来了一些有趣的情况。\par
+
+\mySmallsection{10.2.1 泛型类型成员的rvalue引用}
+
+对模板形参的成员类型的rvalue引用不是通用引用。\par
+
+例如:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void foo(typename T::value_type&& arg); // not a universal reference
+\end{codebox}
+
+这里有一个完整的例子:\par
+
+\begin{codeboxt}[cpp]{generic/universalmem.cpp}
+#include <iostream>
+#include <string>
+#include <vector>
+
+template<typename T>
+void insert(T& coll, typename T::value_type&& arg)
+{
+  coll.push_back(arg);
+}
+
+int main()
+{
+  std::vector<std::string> coll;
+  ...
+  insert(coll, std::string{"prvalue"}); // OK
+  ...
+  std::string str{"lvalue"};
+  insert(coll, str); // ERROR: T::value_type&& is not a universal reference
+  insert(coll, std::move(str)); // OK
+  ...
+}
+\end{codeboxt}
+
+\mySmallsection{10.2.2 类模板中参数的rvalue引用}
+
+对类模板的模板形参的rvalue引用不是通用引用。\par
+
+例如:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+class C {
+  T&& member; // member is not a universal reference
+  ...
+  void foo(T&& arg); // arg is not a universal reference
+};
+\end{codebox}
+
+完整的例子:\par
+
+\begin{codeboxt}[cpp]{generic/universalclass.cpp}
+#include <iostream>
+#include <string>
+#include <vector>
+
+template<typename T>
+class Coll {
+private:
+  std::vector<T> values;
+public:
+  Coll() = default;
+
+  // function in class template:
+  void insert(T&& val) {
+    values.push_back(val);
+  }
+};
+
+int main()
+{
+  Coll<std::string> coll;
+  ...
+  coll.insert(std::string{"prvalue"}); // OK
+  std::string str{"lvalue"};
+  coll.insert(str); // ERROR: T&& of Coll<T> is not a universal reference
+  coll.insert(std::move(str)); // OK
+  ...
+}
+\end{codeboxt}
+
+通常，类模板中的函数不遵循函数模板规则。就是\textit{temploid}，泛型代码在实例化类时遵循普通函数的规则。\par
+
+\mySmallsection{10.2.3 完全特化中参数的rvalue引用}
+
+对函数模板的完全特化的形参的rvalue引用不是通用引用。\par
+
+例如:\par
+
+\begin{codebox}[cpp]
+template<typename T> // primary template
+void foo(T&& arg); // - arg is a universal reference
+...
+template<> // full specialization (for rvalues only)
+void foo(std::string&& arg); // - arg is not a universal reference
+\end{codebox}
+
+对于std::string类型的lvalue，仍然会调用主模板。要特化std::string的主模板的所有情况，必须提供第二个全特化版本:\par
+
+\begin{codebox}[cpp]
+template<> // full specialization (for lvalues)
+void foo(std::string& arg);
+\end{codebox}
+
+完整的例子:\par
+
+\begin{codeboxt}[cpp]{generic/universalspec.cpp}
+#include <iostream>
+#include <string>
+#include <vector>
+
+// primary template taking a universal reference:
+template<typename Coll, typename T>
+void insert(Coll& coll, T&& arg)
+{
+  std::cout << "primary template for type T called\n";
+  coll.push_back(arg);
+}
+
+// full specialization for rvalues of type std::string:
+template<>
+void insert(std::vector<std::string>& coll, std::string&& arg)
+{
+  std::cout << "full specialization for type std::string&& called\n";
+  coll.push_back(arg);
+}
+
+// full specialization for lvalues of type std::string:
+template<>
+void insert(std::vector<std::string>& coll, const std::string& arg)
+{
+  std::cout << "full specialization for type const std::string& called\n";
+  coll.push_back(arg);
+}
+
+int main()
+{
+  std::vector<std::string> coll;
+  ...
+  insert(coll, std::string{"prvalue"}); // calls full specialization for rvalues
+  std::string str{"lvalue"};
+  insert(coll, str); // calls full specialization for lvalues
+  insert(coll, std::move(str)); // calls full specialization for rvalues
+  ...
+}
+\end{codeboxt}
+
+注意，必须在类定义之外声明/定义成员函数模板的全特化:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+class Cont {
+  ...
+  // primary template:
+  template<typename U>
+  void insert(U&& v) { // universal reference
+    coll.push_back(std::forward<U>(v));
+  }
+  ...
+};
+
+// full specializations for Cont<T>::insert<>():
+// - have to be outside the class
+// - need specializations for rvalues and lvalues
+
+template<>
+  template<>
+void Cont<std::string>::insert<>(std::string&& v)
+{
+  coll.push_back(std::move(v));
+}
+
+template<>
+  template<>
+void Cont<std::string>::insert<>(const std::string& v)
+{
+  coll.push_back(v);
+}
+\end{codebox}
+
+
+\section{C++标准如何指定完美转发}
+
+为了理解完美转发的所有规则，来看看这些规则是如何在C++标准中指定的。\par
+
+同样，有以下声明:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void f(T&& arg) // arg is universal/forwarding reference
+{
+  g(std::forward<T>(arg)); // perfectly forward (move() only for passed rvalues)
+}
+\end{codebox}
+
+通常，T只有传递参数的类型:\par
+
+\begin{codebox}[cpp]
+MyType v;
+
+f(MyType{}); // T is deduced as MyType, so arg is declared as MyType&&
+f(std::move(v)); // T is deduced as MyType, so arg is declared as MyType&&
+\end{codebox}
+
+然而，对于通用引用传递lvalue，有一个特殊的规则(参见C++标准的[temp.debit.call]节):\par
+
+如果形参类型是对cv-非限定模板形参的右值引用，实参是lvalue，类型“对T的lvalue引用”将用来代替T进行类型推断。\par
+
+\par
+
+这意味着在这种情况下:\par
+
+\begin{itemize}
+  \item 如果形参的类型是用\&\&声明的，而不是用\textit{const}或\textit{volatile}声明的
+  \item 并且传递的是一个lavlue
+  \item 那么将T推导为T\&。
+\end{itemize}
+
+例子:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void f(T&& arg); // arg is a universal/forwarding reference
+
+MyType v;
+const MyType c;
+
+f(v); // T is deduced as MyType&
+f(c); // T is deduced as const MyType&
+\end{codebox}
+
+但已经将\textit{arg}声明为T\&\&。如果T是T\&，那这里C++的引用折叠规则(参见[dcl.]一节。参考]的C++标准)给出了一个答案:\par
+
+\begin{itemize}
+  \item Type\& \& 成为 Type\&
+  \item Type\& \&\& 成为 Type\&
+  \item Type\&\& \& 成为 Type\&
+  \item Type\&\& \&\& 成为 Type\&\&
+\end{itemize}
+
+这意味着:\par
+
+\begin{codebox}[cpp]
+MyType v;
+const MyType c;
+
+f(v); // T is deduced as MyType& and arg has this type
+f(c); // T is deduced as const MyType& and arg has this type
+\end{codebox}
+
+现在考虑一下\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}是如何定义的，与\textit{std::move()}相反:\par
+
+\begin{itemize}
+  \item \textit{std::move()}总是将类型转换为rvalue引用:
+\begin{codebox}[cpp]
+  static_cast<remove_reference_t<T>&&>(t)
+\end{codebox}
+  它删除引用并转换为相应的rvalue引用类型(删除任何\&并添加\&\&)。
+  \item \textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}只向传递的类型参数添加rvalue引用:
+\begin{codebox}[cpp]
+  static_cast<T&&>(t)
+\end{codebox}
+  引用折叠规则再次适用:
+  \begin{itemize}
+    \item[-] 如果类型T是lvalue引用，T\&\&仍然是lvalue引用(\&\&无效)。因此，将\textit{arg}强制转换为lvalue引用，这意味着\textit{arg}没有移动语义。
+    \item[-] 但是，如果T是rvalue引用(或者根本不是引用)，T\&\&(仍然)是rvalue引用。因此，将\textit{arg}强制转换为rvalue引用，这样就将值类别更改为xvalue，这是\textit{std::move()}的效果。
+  \end{itemize}
+\end{itemize}
+
+因此:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void f(T&& arg) // arg is a universal/forwarding reference
+{
+  g(std::forward<T>(arg)); // perfectly forward (move() only for passed rvalues)
+}
+
+MyType v;
+const MyType c;
+
+f(v); // T and arg are MyType&, forward() has no effect in this case
+f(c); // T and arg are const MyType&, forward() has no effect in this case
+f(MyType{}); // T is MyType, arg is MyType&&, forward() is equivalent to move()
+f(std::move(v)); // T is MyType, arg is MyType&&, forward() is equivalent to move()
+\end{codebox}
+
+注意，字符串字面值是rvalue，因此我们可以推导出的T和\textit{arg}:\par
+
+\begin{codebox}[cpp]
+f("hi"); // lvalue passed, so T and arg have type const char(&)[3]
+f(std::move("hi")); // xvalue passed, so T is deduced as const char[3]
+// and arg has type const char(&&)[3]
+\end{codebox}
+
+还请记住，对函数的引用总是lvalue，因此，如果对函数的引用传递给通用引用，那么T总是推断为lvalue引用:\par
+
+\begin{codebox}[cpp]
+void func(int) {
+}
+f(func); // lvalue passed to f(), so T and arg have type void(&)(int)
+f(std::move(func)); // lvalue passed to f(), so T and arg have type void(&)(int)
+\end{codebox}
+
+\mySmallsection{10.3.1 通用引用类型的说明}
+
+声明通用/转发引用时，还可以显式指定模板形参的类型，而不是推导。但是，请记住参数声明为T\&\&。因此，有以下行为:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void f(T&& arg) // arg is universal/forwarding reference
+{
+  g(std::forward<T>(arg)); // perfectly forward (move() only for passed rvalues)
+}
+
+f<std::string>( ... ); // arg is a raw rvalue reference binding to rvalues only
+f<std::string&>( ... ); // arg is an lvalue reference binding to non-const lvalues only
+f<const std::string&>( ... ); // arg is a const lvalue reference binding to everything
+f<std::string&&>( ... ); // arg is a raw rvalue reference binding to rvalues only
+\end{codebox}
+
+因此，有了明确的规范，通用引用不再作为通用引用。作为调用者，可以指定获得的引用的具体类型。\par
+
+因此，要传递lvalue(这里仍然需要值)，请确保将模板参数指定为lvalue引用。否则，代码将无法编译:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void f(T&& arg) // arg is universal/forwarding reference
+{
+  g(std::forward<T>(arg)); // perfectly forward (move() only for passed rvalues)
+}
+
+std::string s;
+...
+f<std::string>(s); // ERROR: cannot bind rvalue reference to lvalue
+f<std::string&>(s); // OK, does not move and forward s
+f<std::string>(std::move(s)); // OK, does move and forward s
+f<std::string&&>(std::move(s)); // OK, does move and forward s
+\end{codebox}
+
+最后两个调用是等价的。\par
+
+这些规则同样适用于使用C++20特性，在声明普通函数时使用auto\&\&:\par
+
+\begin{codebox}[cpp]
+void f(auto&& arg) {
+  g(std::forward<decltype(arg)>(arg));
+}
+\end{codebox}
+
+\mySmallsection{10.3.2 与通用引用冲突的模板参数推断}
+
+推导通用引用模板参数的特殊规则(当传递lvalue时，将类型作为lvalue引用进行推导)可能会导致看似正确的代码出现意外错误。\par
+
+以下代码无法编译时，开发者通常会感到惊讶:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void insert(std::vector<T>& vec, T&& elem)
+{
+  vec.push_back(std::forward<T>(elem));
+}
+
+std::vector<std::string> coll;
+std::string s;
+...
+insert(coll, s); // ERROR: no matching function call
+\end{codebox}
+
+问题是两个参数都可以推导出参数T，但推导出的类型不一样:\par
+
+\begin{itemize}
+  \item 使用参数\textit{coll}, T将其推导为std::string。
+  \item 但是，根据通用引用的特殊规则，参数\textit{elem}会强制将T推导为std::string\&。
+\end{itemize}
+
+因此，编译器会产生歧义错误。\par
+
+有两种方法可以解决这个问题:\par
+
+\begin{itemize}
+  \item 可以使用std::remove\_reference<>:
+\begin{codebox}[cpp]
+  template<typename T>
+  void insert(std::vector<std::remove_reference_t<T>>& vec, T&& elem)
+  {
+    vec.push_back(std::forward<T>(elem));
+  }
+  std::vector<std::string> coll;
+  std::string s;
+  ...
+  insert(coll, s); // OK, with T deduced as std::string& vec now binds to coll
+\end{codebox}
+  \item 可以使用两个模板参数:
+\begin{codebox}[cpp]
+  template<typename T1, typename T2>
+  void insert(std::vector<T1>& vec, T2&& elem)
+  {
+    vec.push_back(std::forward<T2>(elem));
+  }
+\end{codebox}
+  或者只是:\par
+\begin{codebox}[cpp]
+  template<typename Coll, typename T>
+  void insert(Coll& coll, T&& elem)
+  {
+    coll.push_back(std::forward<T>(elem));
+  }
+\end{codebox}
+\end{itemize}
+
+\mySmallsection{10.3.3 泛型类型的纯rvalue引用}
+
+通过导出通用引用的模板形参的特殊规则(当传递左值时，将类型作为lvalue引用)，可以约束泛型引用形参仅绑定到rvalue:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+requires (!std::is_lvalue_reference_v<T>) // bind to rvalues only
+void callFoo(T&& arg) {
+  foo(std::forward<T>(arg));
+}
+\end{codebox}
+
+C++20之前，必须对类型特征再次使用std::enable\_if<>:\par
+
+\begin{codebox}[cpp]
+template<typename T,
+  typename
+    = typename std::enable_if<!std::is_lvalue_reference<T>::value
+      >::type>
+void callFoo(T&& arg) {
+  foo(std::forward<T>(arg));
+}
+\end{codebox}
+
+
+\section{完美转发(不美丽的)细节}
+
+每当像移动语义这样新的复杂的东西出现，人们就会犯错。犯错是人的天性，在很长一段时间内，我们无法避免犯错，因为不知道未来所有的移动语义的应用和扩展。C++标准中，也对一些关于完美转发和通用引用的错误用法进行了讨论。\par
+
+\mySmallsection{10.4.1 “通用引用”与“转发引用”}
+
+如前所述，对于可以引用任何值类别的引用，有两个不同的术语:通用引用和转发引用。在C++11中，标准没有引入任何通用引用的特殊术语，只是简单地介绍了函数模板形参的rvalue引用的特殊规则。\par
+
+2012年，当描述这些引用的行为时，Scott Meyers(C++社区的主要作者之一)引入了通用引用。为了与描述引用绑定到什么的术语右值引用和rvalue引用保持一致，目的是将通用引用作为一种描述，这种引用可以绑定所有类别。\par
+
+不幸的是，几年后，C++标准委员会决定在C++17中引入一个不同的术语:转发引用。官方的理由是，这些引用不是“通用的”，因为它们不能绑定到所有类别，它们的主要目的是完美地转发参数(见\texthref{http://wg21.link/n4164})。\par
+
+虽然转发是这些引用的用例，但转发不是唯一的用例。另一个非常重要的用例是，将引用普遍地绑定到任何对象，以保存关于其值类别和/或是否为\textit{const}的信息。例如:\par
+
+\begin{itemize}
+  \item 可能必须使用同一个对象(不管是什么对象)两次，才能不丢失该对象是否为\textit{const}的信息。典型的例子是为传递的集合调用\textit{begin()}和\textit{}(正如我们之前看到的那样，稍后还将在基于范围的for循环的实现中使用)。
+  \item 可能需要引用任何值类别的对象，而不将其声明为\textit{const}(稍后给出一个使用通用引用调用基于范围的for循环的例子)。
+\end{itemize}
+
+问题是，为什么C++标准委员会不采纳已经在C++社区建立的术语?争论焦点是这个术语会令人困惑，但C++标准中有更多令人困惑的术语，现在有两个术语表示同一件事，这种困惑肯定更糟糕。\par
+
+无论如何，这是C++标准委员会的慎重决定，提出了一个不同的术语。毫无疑问，通用引用已经足够(C++标准中有更糟糕的术语);然而，对于C++标准委员会的主流群体来说，不采用这个术语而使用另一个或更好的术语就更加重要。\par
+
+我仍然倾向于使用通用引用(本书至少是一致的，本书常使用自己的术语，无论如何那只对专家有效)。然而，为了澄清，我不得不使用通用引用/转发引用来处理这种混乱的情况。\par
+
+对于读者来说，这意味着无论何时听到“转发引用”这个术语，都必须将其转换为通用引用(反之亦然)。如果有疑问，使用通用引用/转发引用。\par
+
+\mySmallsection{10.4.2 为什么普通rvalue和通用引用都用\&\& ?}
+
+通用/转发引用使用与普通rvalue引用相同的语法，这是麻烦的来源。那么，为什么不为通用引用引入一种特定的语法呢?\par
+
+例如，另一种建议可能是(有时讨论为一种修正):\par
+
+\begin{itemize}
+  \item 对普通的rvalue引用使用两个\&号:
+\begin{codebox}[cpp]
+  void foo(Coll&& arg) // arg is an ordinary rvalue reference
+\end{codebox}
+  \item 使用三个\&符号为通用引用:
+\begin{codebox}[cpp]
+  template<typename Coll>
+  void foo(Coll&&& arg) // arg is universal/forwarding reference
+\end{codebox}
+\end{itemize}
+
+然而，这三个\&符号可能看起来太可笑了(每当我显示这个选项时，人们都会笑)。不幸的是，使用三个\&号会更好，因为这会使代码更直观。\par
+
+如前所述，当约束对具体类型的通用引用时，只需声明即可\par
+
+\begin{codebox}[cpp]
+void processString(std::string&&& arg); // assume &&& declares a universal reference
+\end{codebox}
+
+而不是\par
+
+\begin{codebox}[cpp]
+template<typename T>
+requires std::is_convertible_v<T, std::string>
+void processString(T&& arg);
+\end{codebox}
+
+甚至:\par
+
+\begin{codebox}[cpp]
+template<typename T,
+  typename =
+    typename std::enable_if<std::is_convertible<T, std::string>::value
+      >::type>
+void processString(T&& args);
+\end{codebox}
+
+这里有一个重要的教训:有一个可笑但清晰语法比有一个很酷但令人困惑的混乱术语要好。\par
+
+
+\section{总结}
+
+\begin{itemize}
+  \item 可以使用通用引用来绑定到所有\textit{const}和非\textit{const}对象，而不会丢失该对象的\textit{const}信息。
+  \item 即使不使用\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}，也可以使用通用引用来实现对传递的参数的特殊处理。
+  \item 要拥有特定类型的通用引用，需要使用\textit{concepts/\allowbreak{}requirements}(自C++20起)或一些模板技巧(到C++17为止)。
+  \item 只有函数模板形参的rvalue引用是通用引用。类模板形参的rvalue引用、模板形参的成员以及全特化都是普通的rvalue引用，只能绑定到rvalue。
+  \item 当显式指定通用引用的类型时，不再作为通用引用。而是使用类型\&来传递lvalue。
+  \item C++标准委员会将转发引用作为通用引用的“更好”术语。不幸的是，术语转发引用限制了通用引用对特定用例的用途，并造成了对同一事物使用两个术语的不必要混淆。因此，使用通用引用/转发引用可以避免更多的混淆。
+\end{itemize}

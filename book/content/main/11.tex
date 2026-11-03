@@ -1,0 +1,581 @@
+% 第 11 章 用auto\&\&完美传递（由 tools/convert.py 从原 content/ 自动生成，勿手改）
+
+讨论了泛型代码中移动语义、完美转发参数后，现在讨论一下如何完美处理返回值。本章中，将讨论返回值的完美传递。为此，引入auto\&\&作为通用引用(同样也称为转发引用)的另一种方式。但也会讨论auto\&\&与转发值无关的部分。\par
+
+下一章将讨论如何完美地返回值。\par
+
+
+\section{默认的完美的传递}
+
+我们经常需要将返回值传递给另一个函数:\par
+
+\begin{codebox}[cpp]
+// pass return value of compute() to process():
+process(compute(t)); // OK, uses perfect forwarding of returned value
+\end{codebox}
+
+非泛型代码中，需要知道所涉及的类型。然而，泛型代码中，也希望\textit{compute()}的返回值完全传递给\textit{process()}。\par
+
+好消息是：如果直接将返回值传递给另一个函数，该值会完美传递，保持其类型和值类别。不必担心移动语义(如果支持将自动使用)。\par
+
+\mySmallsection{11.1.1 默认完美传递的细节}
+
+完整的例子:\par
+
+\begin{codeboxt}[cpp]{generic/perfectpassing.cpp}
+#include <iostream>
+#include <string>
+
+void process(const std::string&) {
+  std::cout << "process(const std::string&)\n";
+}
+void process(std::string&) {
+  std::cout << "process(std::string&)\n";
+}
+void process(std::string&&) {
+  std::cout << "process(std::string&&)\n";
+}
+
+const std::string& computeConstLRef(const std::string& str) {
+  return str;
+}
+  std::string& computeLRef(std::string& str) {
+  return str;
+}
+  std::string&& computeRRef(std::string&& str) {
+  return std::move(str);
+}
+  std::string computeValue(const std::string& str) {
+  return str;
+}
+
+int main()
+{
+  process(computeConstLRef("tmp")); // calls process(const std::string&)
+
+  std::string str{"lvalue"};
+  process(computeLRef(str)); // calls process(std::string&)
+
+  process(computeRRef("tmp")); // calls process(std::string&&)
+  process(computeRRef(std::move(str))); // calls process(std::string&&)
+
+  process(computeValue("tmp")); // calls process(std::string&&)
+}
+\end{codeboxt}
+
+\begin{itemize}
+  \item 如果\textit{compute()}返回一个const lvalue引用:\par
+\begin{codebox}[cpp]
+  const std::string& computeConstLRef(const std::string& str) {
+    return str;
+  }
+\end{codebox}
+  返回值的值类别是lvalue，这意味着返回值会完美转发，并与\textit{const} lvalue引用匹配:\par
+\begin{codebox}[cpp]
+  process(computeConstLRef("tmp")); // calls process(const std::string&)
+\end{codebox}
+  \item 如果\textit{compute()}返回一个非\textit{const} lvalue引用:\par
+\begin{codebox}[cpp]
+  std::string& computeLRef(std::string& str) {
+    return str;
+  }
+\end{codebox}
+  返回值的值类别是lvalue，这意味着返回值会完全转发，并与非\textit{const} lvalue引用的最佳匹配:\par
+\begin{codebox}[cpp]
+  std::string str{"lvalue"};
+  process(computeLRef(str)); // calls process(std::string&)
+\end{codebox}
+  \item 如果\textit{compute()}返回rvalue引用:\par
+\begin{codebox}[cpp]
+  std::string&& computeRRef(std::string&& str) {
+    return std::move(str);
+  }
+\end{codebox}
+  返回值的值类别是xvalue，这意味着返回值会完全转发为rvalue引用，允许\textit{process()}窃取值:\par
+\begin{codebox}[cpp]
+  process(computeRRef("tmp")); // calls process(std::string&&)
+  process(computeRRef(std::move(str))); // calls process(std::string&&)
+\end{codebox}
+  \item 如果\textit{compute()}按值返回临时对象:\par
+\begin{codebox}[cpp]
+  std::string computeValue(const std::string& str) {
+    return str;
+  }
+\end{codebox}
+  返回值的值类别是prvalue，返回值完全转发为rvalue引用，也允许\textit{process()}窃取值:\par
+\begin{codebox}[cpp]
+  process(computeValue("tmp")); // calls process(std::string&&)
+\end{codebox}
+\end{itemize}
+
+注意，通过返回\textit{const}值:\par
+
+\begin{codebox}[cpp]
+const std::string computeConstValue(const std::string& str) {
+  return str;
+}
+\end{codebox}
+
+或\textit{const} rvalue引用:\par
+
+\begin{codebox}[cpp]
+const std::string&& computeConstRRef(std::string&& str) {
+  return std::move(str);
+}
+\end{codebox}
+
+再次禁用移动语义:\par
+
+\begin{codebox}[cpp]
+process(computeConstValue("tmp")); // calls process(const std::string&)
+process(computeConstRRef("tmp")); // calls process(const std::string&)
+\end{codebox}
+
+如果有\textit{const}\&\&的声明，可以接受这样的重载。\par
+
+因此:不要将value返回的值标记为\textit{const}，也不要将返回的非\textit{const} rvalue引用标记为\textit{const}。\par
+
+
+\section{使用auto\&\&的通用引用}
+
+但在泛型代码中，如何在传递返回值的同时，仍然保持其类型和值类别?\par
+
+答案是通用/转发引用，但没有声明为参数。为此，需要auto\&\&。\par
+
+调用时:\par
+
+\begin{codebox}[cpp]
+// pass return value of compute() to process():
+process(compute(t)); // OK, uses perfect forwarding of returned value
+\end{codebox}
+
+还可以实现以下功能:\par
+
+\begin{codebox}[cpp]
+// pass return value of compute() to process() with some delay:
+auto&& ret = compute(t); // initialize a universal reference with the return value
+...
+process(std::forward<decltype(ret)>(ret)); // OK, uses perfect forwarding of returned value
+\end{codebox}
+
+或者，使用大括号初始化时:\par
+
+\begin{codebox}[cpp]
+// pass return value of compute() to process() with some delay:
+auto&& ret{compute(t)}; // initialize a universal reference with the return value
+...
+process(std::forward<decltype(ret)>(ret)); // OK, uses perfect forwarding of returned value
+\end{codebox}
+
+请参阅generic/perfectautorefref.cpp以获得所有情况下的完整示例。\par
+
+\mySmallsection{11.2.1 auto\&\&的类型定义}
+
+使用auto\&\&声明时，也声明了一个通用引用。定义一个绑定到所有值类别的引用，该引用的类型保留其初始值的类型和值类别。\par
+
+如果声明\par
+
+\begin{codebox}[cpp]
+auto&& ref{ ... }; // ref is a universal/forwarding reference
+\end{codebox}
+
+类型ref是根据函数模板参数的通用引用类型推导出来的:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void callFoo(T&& ref); // ref is a universal/forwarding reference
+\end{codebox}
+
+根据规则，ref(即auto\&\&或T\&\&类型)的类型是\par
+
+\begin{itemize}
+  \item 如果引用lvalue，则为lvalue引用
+  \item 如果引用rvalue，则为rvalue引用
+\end{itemize}
+
+例如:\par
+
+\begin{codebox}[cpp]
+// forward declarations:
+std::string retByValue();
+std::string& retByRef();
+std::string&& retByRefRef();
+const std::string& retByConstRef();
+const std::string&& retByConstRefRef();
+
+// deduced auto&& types:
+std::string s;
+auto&& r1{s}; // std::string&
+auto&& r2{std::move(s)}; // std::string&&
+
+auto&& r3{retByValue()}; // std::string&&
+auto&& r4{retByRef()}; // std::string&
+auto&& r5{retByRefRef()}; // std::string&&
+auto&& r6{retByConstRef()}; // const std::string&
+auto&& r7{retByConstRefRef()}; // const std::string&&
+\end{codebox}
+
+当使用rvalue(prvalue或xvalue)初始化用auto\&\&声明的引用时，就声明了一个rvalue引用。例如，将引用绑定到标记为\textit{std::move()}的对象或返回的普通值或rvalue引用时，就会出现这种情况。\par
+
+但是，当使用lvalue初始化用auto\&\&声明的引用时，就声明了一个lvalue引用。例如，将引用绑定到已命名的对象或返回lvalue引用的函数的返回值时，就会出现这种情况。\par
+
+因为字符串字面值是lvalue(以字符数组为类型)，所以将通用引用绑定到字符串字面值时，也会得到lvalue引用:\par
+
+\begin{codebox}[cpp]
+auto&& r8{"hello"}; // const char(&)[6]
+\end{codebox}
+
+因为对函数的引用总是lvalue，所以将通用引用绑定到函数时，也会得到lvalue引用:\par
+
+\begin{codebox}[cpp]
+std::string foo(int); // forward declaration
+
+auto&& r9{foo}; // lvalue of type std::string(&)(int)
+\end{codebox}
+
+\mySmallsection{11.2.2 完美转发auto\&\&引用}
+
+同样，也可以完美地将传递给通用引用的值作为函数模板形参:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void callFoo(T&& ref) {
+  foo(std::forward<T>(ref)); // becomes foo(std::move(ref)) for passed rvalues
+}
+\end{codebox}
+
+完全可以转发auto\&\&的通用引用:\par
+
+\begin{codebox}[cpp]
+auto&& ref{ ... };
+
+foo(std::forward<decltype(ref)>(ref)); // becomes foo(std::move(ref)) for rvalues
+\end{codebox}
+
+表达式\textit{std::\allowbreak{}forward<\allowbreak{}decltype(\allowbreak{}ref)\allowbreak{}>(\allowbreak{}ref)\allowbreak{}}是这样实现的:\par
+
+\begin{itemize}
+  \item 如果传递的decltype(ref)类型是一个lvalue引用，如果ref是用返回的lvalue引用初始化的，则表达式将ref强制转换为lvalue引用，这意味着ref传递时没有移动语义。
+  \item 如果传递的decltype(ref)类型是rvalue引用，如果ref是用返回的普通值或rvalue引用初始化的，则表达式将ref转换为rvalue引用，这是\textit{std::\allowbreak{}move(\allowbreak{}ref)\allowbreak{}}的效果。
+\end{itemize}
+
+因此，如果用函数的返回值初始化通用引用:\par
+
+\begin{codebox}[cpp]
+auto&& ret{compute(t)}; // initialize a universal reference with the return value
+\end{codebox}
+
+表达式为\par
+
+\begin{codebox}[cpp]
+process(std::forward<decltype(ret)>(ret)); // perfectly forward the return value
+\end{codebox}
+
+当\textit{compute()}返回rvalue(如临时对象或rvalue引用)时，扩展为\par
+
+\begin{codebox}[cpp]
+process(std::move(ret));
+\end{codebox}
+
+
+\section{auto\&\&的非转发引用}
+
+再次注意，通用引用是将引用绑定到任何类型和值类别的任何对象，并且仍然保留其值类别和是否为\textit{const}的唯一方法。这也适用于用auto\&\&声明的通用引用。\par
+
+\mySmallsection{11.3.1 通用引用和基于范围的for循环}
+
+使用基于范围的for循环时，使用auto\&\&声明的非转发通用引用起着重要的作用。\par
+
+\mySmallsection{基于范围的循环规范}
+
+在C++标准中，基于范围的for循环可以指定使用普通for循环遍历范围内的元素。\par
+
+类似这样的调用:\par
+
+\begin{codebox}[cpp]
+std::vector<std::string> coll;
+...
+for (const auto& s : coll) {
+  ...
+}
+\end{codebox}
+
+相当于:\par
+
+\begin{codebox}[cpp]
+std::vector<std::string> coll;
+...
+auto&& range = coll; // initialize a universal reference
+auto pos = range.begin(); // to use the given range coll here
+auto end = range.end(); // and here
+for ( ; pos != end; ++pos ) {
+  const auto& s = *pos;
+  ...
+}
+\end{codebox}
+
+将range声明为一个通用引用，希望能够将其绑定到每个range，所以可以使用它两次(一次是开始，一次是结束)没有创建副本或丢失信息。\par
+
+循环应该为:\par
+
+\begin{itemize}
+  \item 非\textit{const} lvalue:
+\begin{codebox}[cpp]
+  std::vector<int> coll;
+  ...
+  for (int& i : coll) {
+    i *= 2;
+  }
+\end{codebox}
+  \item \textit{const} lvalue:
+\begin{codebox}[cpp]
+  const std::vector<int> coll{0, 8, 15};
+  ...
+  for (int i : coll) {
+    ...
+  }
+\end{codebox}
+  \item prvalue:
+\begin{codebox}[cpp]
+  for (int i : std::vector<int>{0, 8, 15}) {
+    ...
+  }
+\end{codebox}
+\end{itemize}
+
+注意，对于这些情况，没有其他方法声明range:\par
+
+\begin{itemize}
+  \item 使用auto，将创建range的副本(这需要花费时间并禁用对元素的修改)。
+  \item 使用auto\&，可以用临时的prvalue禁用range的初始化。
+  \item 使用const auto\&，将失去所遍历range的非常量性。
+\end{itemize}
+
+请注意，现在指定的基于范围的for循环有一个问题。代码如以下:\par
+
+\begin{codebox}[cpp]
+  std::vector<std::string> createStrings();
+  ...
+  for (char c : createStrings().at(0)) { // fatal runtime error
+    ...
+  }
+\end{codebox}
+
+成为:\par
+
+\begin{codebox}[cpp]
+  std::vector<std::string> createStrings();
+  ...
+  auto&& range = createStrings().at(0); // OOPS: universal reference to reference
+  auto pos = range.begin(); // return value of createStrings() destroyed here
+  auto end = range.end();
+  for ( ; pos != end; ++pos ) {
+    char c = *pos;
+    ...
+  }
+\end{codebox}
+
+所有有效引用都延长了所绑定值的生命周期，这也适用于rvalue引用。但是，没有绑定到\textit{createString(\allowbreak{})\allowbreak{}}的返回值(这样可以正常工作);而是绑定到引用，该引用指向由\textit{at()}返回的\textit{createStrings(\allowbreak{})\allowbreak{}}的返回类型，扩展了引用的生命周期。因此，该循环将遍历已经销毁的字符串。\par
+
+\mySmallsection{使用基于范围的for循环}
+
+即使在调用基于范围的for循环时，通用引用也有意义。\par
+
+要在迭代时修改元素，必须使用非\textit{const}引用。考虑函数模板，将传递值赋给传递集合中的所有元素:\par
+
+\begin{codebox}[cpp]
+template<typename Coll, typename T>
+void assign(Coll& coll, const T& value) {
+  for (auto& elem : coll) {
+    elem = value;
+  }
+}
+\end{codebox}
+
+看起来适用于所有容器类型和元素类型(其中支持赋值):\par
+
+\begin{codebox}[cpp]
+std::vector<int> coll1{0, 8, 15};
+...
+assign(coll1, 42); // OK
+
+std::vector<std::string> coll2{"hello", "world"};
+...
+assign(coll2, "ok"); // OK
+\end{codebox}
+
+然而，有种情况行不通:\par
+
+\begin{codebox}[cpp]
+std::vector<bool> collB{false, true, false};
+...
+assign(collB, true); // ERROR: cannot bind non-const lvalue reference to an rvalue
+\end{codebox}
+
+发生了什么事?看一下基于范围的for循环展开的代码:\par
+
+\begin{codebox}[cpp]
+std::vector<bool> coll{false, true, false};
+...
+{
+  auto&& range = coll; // OK: universal reference to reference
+  auto pos = range.begin(); // OK
+  auto end = range.end(); // OK
+  for ( ; pos != end; ++pos ) { // OK
+    auto& elem = *pos; // ERROR: cannot bind non-const lvalue reference to an rvalue
+    elem = elem + elem;
+  }
+}
+\end{codebox}
+
+问题是std::vector<bool>中的元素不是bool类型的对象，而是单个比特位。实现方法是:对于std::vector<bool>，元素引用的类型不是元素类型的引用。std::\allowbreak{}vector<\allowbreak{}bool>的实现是主模板std::vector<T>实现的偏特化，其中元素的引用是代理类的对象，可以像引用一样使用:\par
+
+\begin{codebox}[cpp]
+namespace std {
+  template< ... >
+  class vector<bool, ... > {
+    public:
+    ...
+    class reference {
+      ...
+    };
+    ...
+  };
+}
+\end{codebox}
+
+当对迭代器解引用时，返回std::vector<bool>::reference的值。因此，在基于范围的for循环的扩展代码中的语句为\par
+
+\begin{codebox}[cpp]
+auto& elem = *pos;
+\end{codebox}
+
+尝试将非\textit{const} lvalue引用绑定到临时对象(prvalue)，这是不允许的。\par
+
+然而，这个问题有一个解决方案:调用基于范围的for循环时使用通用引用:\par
+
+\begin{codebox}[cpp]
+template<typename Coll, typename T>
+void assign(Coll& coll, const T& value) {
+  for (auto&& elem : coll) { // note: universal reference support proxy element types
+    elem = value;
+  }
+}
+\end{codebox}
+
+因为通用引用可以绑定到任何对象(甚至是prvalue)，所以vector<bool>的代码现在可以编译:\par
+
+\begin{codebox}[cpp]
+std::vector<bool> collB{false, true, false};
+...
+assign(collB, true); // OK (universal reference used to bind to an element)
+\end{codebox}
+
+因此，找到了使用非转发通用引用的另一个原因:绑定到没有作为引用实现的引用类型。或者说:允许绑定作为代理类型提供的非\textit{const}对象来进行操作。\par
+
+
+\section{完美的Lambda转发}
+
+如果想要完美地转发通用Lambda的参数，必须使用通用引用和\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}。但现在只需使用auto\&\&来声明通用引用。\par
+
+已经有了一个函数模板:\par
+
+\begin{codebox}[cpp]
+auto callFoo = [](auto&& arg) { // arg is a universal/forwarding reference
+  foo(std::forward<decltype(arg)>(arg)); // perfectly forward arg
+};
+
+std::string s{"BLM"};
+callFoo(s); // OK, arg is std::string&
+callFoo(std::move(s)); // OK, arg is std::string&&
+\end{codebox}
+
+在C++20中，可以通过用模板形参声明Lambda来避免使用decltype(arg)。\par
+
+下面的泛型Lambda使用此函数，完美地转发了可变数量的参数:\par
+
+\begin{codebox}[cpp]
+[] (auto&&... args) {
+  ...
+  foo(std::forward<decltype(args)>(args)...);
+};
+\end{codebox}
+
+请记住Lambda只是定义函数对象的一种简单方法(定义了operator()的对象允许其作为函数使用)。上面的定义扩展为编译器定义的类(闭包类型)，并将通用引用定义为模板形参:\par
+
+\begin{codebox}[cpp]
+class NameDefinedByCompiler {
+  ...
+  public:
+  template<typename... Args>
+  auto operator() (Args&&... args) const {
+    ...
+    foo(std::forward<decltype(args)>(args)...);
+  }
+};
+\end{codebox}
+
+再次注意，用\textit{const}(或\textit{volatile})限定的泛型rvalue引用不是通用引用，这也适用于Lambda。如果形参用\textit{const} auto\&\&声明，只能传递rvalue:\par
+
+\begin{codebox}[cpp]
+auto callFoo = [](const auto&& arg) { // arg is not a universal reference
+  ...
+};
+
+const std::string cs{"BLM"};
+callFoo(cs); // ERROR: s is not an rvalue
+callFoo(std::move(cs)); // OK, arg is const std::string&&
+\end{codebox}
+
+Lambda内部，使用\textit{std::move()}完美传递传递参数就可以了。\par
+
+
+\section{C++20中函数声明使用auto\&\&}
+
+因为C++20，也可以用auto\&\&来声明普通函数，处理方式一样:用通用引用来声明函数模板。\par
+
+如下定义:\par
+
+\begin{codebox}[cpp]
+void callFoo(auto&& val) {
+  foo(std::forward<decltype(arg)>(arg));
+}
+\end{codebox}
+
+相当于:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void callFoo(T&& val) {
+  foo(std::forward<decltype(arg)>(arg));
+}
+\end{codebox}
+
+还可以在这里显式地指定参数的类型。然而，与普通函数模板一样，必须用适合所传递参数的值类别的类型来限定模板形参:\par
+
+\begin{codebox}[cpp]
+std::string s;
+...
+callFoo<std::string>(s); // ERROR: cannot bind rvalue reference to lvalue
+callFoo<std::string&>(s); // OK, does not move and forward s
+callFoo<std::string>(std::move(s)); // OK, does move and forward s
+callFoo<std::string&&>(std::move(s)); // OK, does move and forward s
+\end{codebox}
+
+
+\section{总结}
+
+\begin{itemize}
+  \item 不要使用\textit{const}返回值(否则将禁用返回值的移动语义)。
+  \item 不要将返回的非\textit{const} rvalue引用标记为\textit{const}。
+  \item auto\&\&可用于声明不是参数的通用引用。就像任何通用引用一样，它可以引用任何类型和值类别的所有对象，其类型是
+  \begin{itemize}
+    \item[-] 如果绑定到lvalue，则为lvalue引用(类型\&)
+    \item[-] 如果绑定到rvalue，则为rvalue引用(类型\&\&)
+  \end{itemize}
+  \item 使用\textit{std::\allowbreak{}forward<\allowbreak{}decltype(\allowbreak{}ref)\allowbreak{}>(\allowbreak{}ref)\allowbreak{}}完美地转发用auto\&\&声明的通用引用ref。
+  \item 可以使用通用引用同时引用\textit{const}和非\textit{const}对象，并多次使用而不会丢失\textit{const}信息。
+  \item 可以使用通用引用来绑定到代理类型的引用。
+  \item 考虑在迭代集合元素以修改元素的泛型代码中使用auto\&\&。这样，代码就可以用于代理类型的引用。
+  \item 声明Lambda(或函数，因为C++20)的形参时使用auto\&\&是在函数模板中声明作为通用引用形参的方式。
+\end{itemize}

@@ -1,0 +1,657 @@
+% 第 8 章 值的种类（由 tools/convert.py 从原 content/ 自动生成，勿手改）
+
+本章会介绍移动语义的形式术语和规则。并且会正式的介绍值的类别，如lvalue、rvalue、prvalue和xvalue，并讨论了在绑定对象引用时的作用。也会讨论移动语义不会自动传递的细节，以及decltype在表达式调用时的微妙行为。\par
+
+这一章是这本书中最复杂的一章。可能会看到一些事实和特征，可能很难相信或理解。当您再次阅读值类别、对象的绑定引用和decltype时，可以再回到这里看看。\par
+
+
+\section{值的种类}
+
+要编译表达式或语句，所涉及的类型是否合适并不重要。例如，如果在赋值符的左边使用了int型字面值，则不能将int型赋值给int型字面值:\par
+
+\begin{codebox}[cpp]
+int i = 42;
+
+i = 77; // OK
+77 = i; // ERROR
+\end{codebox}
+
+因此，C++程序中的每个表达式都有值类别。除了类型之外，值类别对于决定表达式可以做什么也很重要。\par
+
+然而，值类别在C++中随着时间的推移而改变。\par
+
+\mySmallsection{8.1.1 值类型的历史}
+
+从历史上看(引用Kernighan\&Ritchie C, K\&R C)，最初只有lvalue和rvalue:\par
+
+\begin{itemize}
+  \item lvalue可以出现在赋值的左边
+  \item rvalue只能出现在赋值的右侧
+\end{itemize}
+
+根据这个定义，当使用int对象/变量时，使用的是lvalue，但当使用int字面值时，使用的是rvalue:\par
+
+\begin{codebox}[cpp]
+int x; // x is an lvalue when used in an expression
+
+x = 42; // OK, because x is an lvalue and the type matches
+42 = x; // ERROR: 42 is an rvalue and can be only on the right-hand side of an assignment
+\end{codebox}
+
+然而，这些类别不仅重要，并且通常用于指定表达式是否以及在何处可以使用。例如:\par
+
+\begin{codebox}[cpp]
+int x; // x is an lvalue when used in an expression
+
+int* p1 = &x; // OK: & is fine for lvalues (object has a specified location)
+int* p2 = &42; // ERROR: & is not allowed for rvalues (object has no specified location)
+\end{codebox}
+
+然而，在ANSI-C中，事情变得更加复杂。，因为声明为\textit{const int}的x不能放在赋值函数的左边，但仍然可以在其他只能使用左值的地方使用:\par
+
+\begin{codebox}[cpp]
+const int c = 42; // Is c an lvalue or rvalue?
+
+c = 42; // now an ERROR (so that c should no longer be an lvalue)
+const int* p1 = &c; // still OK (so that c should still be an lvalue)
+\end{codebox}
+
+C语言中，声明为\textit{const int}的\textit{c}仍然是lvalue，因为对于特定类型的\textit{const}对象，仍然可以调用大多数lvalue操作。唯一不能做的就是在赋值函数的左边有一个\textit{const}对象。\par
+
+因此，在ANSI-C中，l的含义变成了定位。lvalue现在是程序中具有指定位置的对象(例如，以便您可以获取地址)。以同样的方式，rvalue现在只是一个可读的值。\par
+
+C++98采用了这些值类别的定义。然而，随着移动语义的引入，问题出现了:用\textit{std::move()}标记的对象应该有哪些值类别，用\textit{std::move()}标记的类的对象应该遵循以下规则:\par
+
+\begin{codebox}[cpp]
+std::string s;
+...
+std::move(s) = "hello"; // OK (behaves like an lvalue)
+auto ps = &std::move(s); // ERROR (behaves like an rvalue)
+\end{codebox}
+
+但是，请注意基本数据类型(FDT)的行为:\par
+
+\begin{codebox}[cpp]
+int i;
+...
+std::move(i) = 42; // ERROR
+auto pi = &std::move(i); // ERROR
+\end{codebox}
+
+除了基本数据类型之外，标记为\textit{std::move()}的对象仍应该像lvalue一样，允许修改它的值。另一方面，也存在一些限制，比如不能获取该地址。\par
+
+因此，引入了一个新的类别xvalue(“eXpire value”)来为显式标记的对象指定规则，因为这里不再需要这个值(主要是用\textit{std::move()}标记的对象)。大多数C++11前的rvalue的规则也适用于xvalue。因此，以前的rvalue变成了一个复合值类别，现在表示新的主值类别prvalue(对于以前的所有rvalue)和xvalue。关于提出这些改变的论文，请参阅\texthref{http://wg21.link/n3055}。\par
+
+\mySmallsection{8.1.2 C++11的值类别}
+
+C++11的值类别如图8.1所示。\par
+
+图8.1 C++11的值类别\par
+
+\myGraphic{1.0}{images/chapter8/1}{}
+
+有以下主要类别:\par
+
+\begin{itemize}
+  \item lvalue (“定位值”)
+  \item prvalue (“纯可读值”)
+  \item xvalue (“过期值”)
+\end{itemize}
+
+综合类别为:\par
+
+\begin{itemize}
+  \item glvalue (“广义lvalue”)作为“左lvalue或xvalue”的常用术语
+  \item rvalue作为“xvalue或prvalue”的常用术语
+\end{itemize}
+
+\textbf{基本表达式的值分类}\par
+
+lvalue的例子有:\par
+
+\begin{itemize}
+  \item 仅为变量、函数或数据成员(除右值的普通值成员外)的名称的表达式
+  \item 只是字符串字面量的表达式(例如，"hello")
+  \item 如果函数声明返回左值引用，则返回函数的值(返回类型type \&)
+  \item 任何对函数的引用，即使标记为\textit{std::move()}(参见下面)
+  \item 内置的一元操作符*的结果(即，对原始指针进行解引用所产生的结果)
+\end{itemize}
+
+prvalue的例子有:\par
+
+\begin{itemize}
+  \item 由非字符串字面量的内置字面量组成的表达式(例如，42、true或nullptr)
+  \item 如果函数声明为按值返回，则按类型返回值(返回类型为Type)。
+  \item 内置的一元操作符\&的结果(即，获取表达式的地址所产生的结果)
+  \item Lambda表达式
+\end{itemize}
+
+xvalues的示例如下:\par
+
+\begin{itemize}
+  \item 用\textit{std::move()}标记对象的结果
+  \item 对对象类型(不是函数类型)的rvalue引用的强制转换
+  \item 函数声明返回rvalue引用(返回类型type \&\&)
+  \item 右值的非静态值成员(见下面)
+\end{itemize}
+
+例如:\par
+
+\begin{codebox}[cpp]
+class X {
+};
+
+X v;
+const X c;
+
+f(v); // passes a modifiable lvalue
+f(c); // passes a non-modifiable lvalue
+f(X()); // passes a prvalue (old syntax of creating a temporary)
+f(X{}); // passes a prvalue (new syntax of creating a temporary)
+f(std::move(v)); // passes an xvalue
+\end{codebox}
+
+说些经验法则:\par
+
+\begin{itemize}
+  \item 所有用作表达式的名称都是lvalue。
+  \item 所有用作表达式的字符串字面值都是lvalue。
+  \item 所有非字符串字面值(4.2、true或nullptr)都是prvalue。
+  \item 所有没有名称的临时对象(特别是回的对象)都是prvalues。
+  \item 所有标记为\textit{std::move()}的对象，及其值成员都是xvalues。
+\end{itemize}
+
+严格来说，glvalues、prvalues和xvalues是表达式的术语，而不是值的术语(这意味着这些术语用词不当)。例如，变量本身不是lvalue，只有表示该变量为lvalue的表达式:\par
+
+\begin{codebox}[cpp]
+int x = 3; // here, x is a variable, not an lvalue
+int y = x; // here, x is an lvalue
+\end{codebox}
+
+第一个语句中，3是一个初始化变量x的prvalue(不是lvalue)。第二个语句中，x是一个lvalue(它的计算值指定了一个包含值3的对象)。lvalue x用作rvalue，它初始化变量y。\par
+
+\mySmallsection{8.1.3 C++17新加的值类别}
+
+C++17具有相同的值类别，图8.2中描述了值类别的语义。\par
+
+现在解释值类别有两种主要的表达方式:\par
+
+\begin{itemize}
+  \item glvalues: 用于长生命周期对象或函数位置的表达式
+  \item prvalues: 用于短生命周期对象的初始化表达式
+\end{itemize}
+
+然后，xvalue是表示不再需要其资源/值的(长期存在的)对象。\par
+
+图8.2 C++17新加的值类别\par
+
+\myGraphic{1.0}{images/chapter8/2}{}
+
+\mySmallsection{通过值传递prvalues}
+
+有了这个更改，即使没有定义有效的副本和有效的移动构造函数，现在也可以将prvalue作为未命名的初始值按值传递:\par
+
+\begin{codebox}[cpp]
+class C {
+  public:
+  C( ... );
+  C(const C&) = delete; // this class is neither copyable ...
+  C(C&&) = delete; // ... nor movable
+};
+
+C createC() {
+  return C{ ... }; // Always creates a conceptual temporary prior to C++17.
+} // In C++17, no temporary object is created at this point.
+
+void takeC(C val) {
+  ...
+}
+
+auto n = createC(); // OK since C++17 (error prior to C++17)
+
+takeC(createC()); // OK since C++17 (error prior to C++17)
+\end{codebox}
+
+C++17之前，如果没有复制或移动支持，传递prvalue(例如：\textit{createC()}的创建和初始化返回值)是不可能的。但是，从C++17开始，只要是不需要有地址的对象，就可以按值传递prvalues。\par
+
+\mySmallsection{具象化}
+
+C++17随后引入了一个新术语，称为具象化(未命名的临时对象)，此时prvalue变成了临时对象。因此，临时物化转换是prvalue到xvalue转换(通常是隐式的)。\par
+
+需要glvalue(左值或xvalue)的地方使用prvalue，就会创建临时对象，并使用该prvalue初始化(记住，prvalue主要是“初始化值”)，并且该prvalue会指定临时对象的xvalue。因此，在上面的例子中:\par
+
+\begin{codebox}[cpp]
+void f(const X& p); // accepts an expression of any value category but expects a glvalue
+
+f(X{}); // creates a temporary prvalue and passes it materialized as an xvalue
+\end{codebox}
+
+因为本例中的\textit{f()}有一个引用形参，所以需要一个glvalue参数。然而，表达式X\{\}是prvalue。因此，“临时具象化”的规则开始起作用，表达式X\{\}被“转换”为xvalue，该xvalue指定使用默认构造函数初始化的临时对象。\par
+
+请注意，具象化并不意味着我们创建新的/不同的对象。左值引用\textit{p}仍然绑定到xvalue和prvalue，尽管后者现在会涉及到向xvalue的转换。\par
+
+
+\section{值类别的特殊规则}
+
+对于影响移动语义的函数和成员的值类型，有特殊的规则。\par
+
+\mySmallsection{8.2.1 函数的值类型}
+
+C++标准中的特殊规则是，所有引用函数的表达式都是lvalue。\par
+
+例如:\par
+
+\begin{codebox}[cpp]
+void f(int) {
+}
+
+void(&fref1)(int) = f; // fref1 is an lvalue
+void(&&fref2)(int) = f; // fref2 is also an lvalue
+
+auto& ar = std::move(f); // OK: ar is lvalue of type void(&)(int)
+\end{codebox}
+
+与对象类型相反，可以将非\textit{const} lvalue引用绑定到标记为\textit{std::move()}的函数指针，因为标记为\textit{std::move()}的函数指针仍然是lvalue。\par
+
+\mySmallsection{8.2.2 数据成员的值类型}
+
+如果使用对象的数据成员(例如，使用std::pair<>的第一个和第二个成员时)，将使用特殊规则。\par
+
+通常，数据成员的值类型如下:\par
+
+\begin{itemize}
+  \item lvalue的数据成员是lvalue。
+  \item rvalue的引用和静态数据成员是lvalue。
+  \item rvalue的普通数据成员是xvalue。
+\end{itemize}
+
+这些规则反映了引用或静态成员实际上不是对象的一部分。如果不再需要对象的值，这也适用于对象的普通数据成员。但是，引用或静态的成员的值可能被其他对象所使用。\par
+
+例如:\par
+
+\begin{codebox}[cpp]
+std::pair<std::string, std::string&> foo(); // note: member second is reference
+
+std::vector<std::string> coll;
+...
+coll.push_back(foo().first); // moves because first is an xvalue here
+coll.push_back(foo().second); // copies because second is an lvalue here
+\end{codebox}
+
+需要使用\textit{std::move()}来移动第二个成员:\par
+
+\begin{codebox}[cpp]
+coll.push_back(std::move(foo().second)); // moves
+\end{codebox}
+
+如果有lvalue(一个有名字的对象)，就有两种使用\textit{std::move}的方式来移动成员:\par
+
+\begin{itemize}
+  \item std::move(obj).member
+  \item std::move(obj.member)
+\end{itemize}
+
+\textit{std::move()}的意思是“不再需要这个值”，所以不再需要对象的值，应该标记\textit{obj}。如果不再需要成员的值，应该标记\textit{member}。然而，实际情况会比较复杂。\par
+
+\mySmallsection{\textit{std::move()}用于普通数据成员}
+
+如果成员既不是静态也不是引用\textit{，std::\allowbreak{}move(\allowbreak{})\allowbreak{}}能将成员转换为xvalue，以便能够使用移动语义。\par
+
+考虑声明了以下内容:\par
+
+\begin{codebox}[cpp]
+std::vector<std::string> coll;
+std::pair<std::string, std::string> sp;
+\end{codebox}
+
+以下代码先将成员移动，然后再将成员移动到\textit{coll}中:\par
+
+\begin{codebox}[cpp]
+sp = ... ;
+coll.push_back(std::move(sp.first)); // move string first into coll
+coll.push_back(std::move(sp.second)); // move string second into coll
+\end{codebox}
+
+但是，下面的代码具有相同的效果:\par
+
+\begin{codebox}[cpp]
+sp = ... ;
+coll.push_back(std::move(sp).first); // move string first into coll
+coll.push_back(std::move(sp).second); // move string second into coll
+\end{codebox}
+
+看起来有点奇怪，\textit{std::move()}标记对象之后仍然使用obj。在本例中，知道对象的哪个部分可以移动，所以可以使用未移动的部分。因此，当必须实现移动构造函数时，我更喜欢用\textit{std::move()}标记成员。\par
+
+\mySmallsection{\textit{std::move()}用于引用或静态成员}
+
+如果成员是引用或静态的，则使用不同的规则:rvalue的引用或静态成员是lvalue。同样，这条规则反映了，成员的值并不是对象的一部分。“不再需要对象的值”并不意味着“不再需要不属于对象的值(成员的值)”。\par
+
+因此，如果有引用或静态成员，那么如何使用\textit{std::move()}是有区别的:\par
+
+\begin{itemize}
+  \item 对对象使用\textit{std::move()}不起作用:\par
+\begin{codebox}[cpp]
+  struct S {
+    static std::string statString; // static member
+    std::string& refString; // reference member
+  };
+  S obj;
+  ...
+  coll.push_back(std::move(obj).statString); // copies statString
+  coll.push_back(std::move(obj).refString); // copies refString
+\end{codebox}
+  \item 对成员使用\textit{std::move(})具有的效果:\par
+\begin{codebox}[cpp]
+  struct S {
+    static std::string statString;
+    std::string& refString;
+  };
+  S obj;
+  ...
+  coll.push_back(std::move(obj.statString); // moves statString
+  coll.push_back(std::move(obj.refString); // moves refString
+\end{codebox}
+  这样的举措是否有用是另一个问题。窃取静态成员或引用成员的值意味着修改所使用对象外部的值，这还能说得通，但也可能是意外和危险的。通常，类型应该更好地保护对这些成员的访问。\par
+\end{itemize}
+
+泛型代码中，可能不知道成员是静态的还是引用的。因此，使用\textit{std::move()}来标记对象是不那么危险的，就是看起来奇怪:\par
+
+\begin{codebox}[cpp]
+coll.push_back(std::move(obj).mem1); // move value, copy reference/static
+coll.push_back(std::move(obj).mem2); // move value, copy reference/static
+\end{codebox}
+
+稍后将介绍的\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}可以用来完美地转发对象的成员。参见basics/members.cpp获取完整的示例。\par
+
+
+\section{绑定引用时值类别的影响}
+
+将引用绑定到对象时，值类型起着重要的作用。例如，在C++98/C++03中，定义了可以将rvalue(没有名称的临时对象或标有\textit{std::move()}的对象)赋值或传递给\textit{const} lvalue引用，但不能传递给非\textit{const} lvalue引用:\par
+
+\begin{codebox}[cpp]
+std::string createString(); // forward declaration
+
+const std::string& r1{createString()}; // OK
+
+std::string& r2{createString()}; // ERROR
+\end{codebox}
+
+这里编译器打印的错误消息是“不能将非\textit{const} lvalue引用绑定到rvalue”。\par
+
+调用\textit{foo2()}时也会得到这个错误消息:\par
+
+\begin{codebox}[cpp]
+void foo1(const std::string&); // forward declaration
+void foo2(std::string&); // forward declaration
+
+foo1(std::string{"hello"}); // OK
+foo2(std::string{"hello"}); // ERROR
+\end{codebox}
+
+\mySmallsection{8.3.1 解析rvalue引用的重载}
+
+让我们看看传递对象给引用时的规则。\par
+
+假设类\textit{X}中有一个非\textit{const}变量\textit{v}和一个\textit{const}变量\textit{c}:\par
+
+\begin{codebox}[cpp]
+class X {
+  ...
+};
+
+X v{ ... };
+const X c{ ... };
+\end{codebox}
+
+如果提供了函数\textit{f()}的所有引用重载，则绑定引用的规则表会列出了传递参数的绑定引用的规则:\par
+
+\begin{codebox}[cpp]
+void f(const X&); // read-only access
+void f(X&); // OUT parameter (usually long-living object)
+void f(X&&); // can steal value (object usually about to die)
+void f(const X&&); // no clear semantic meaning
+\end{codebox}
+
+数字列出了重载解析的优先级，以便了解在提供多个重载时调用了哪个函数。数字越小，优先级越高(优先级1表示最优先)。\par
+
+注意，只能将rvalue(prvalues，如没有名称的临时对象)或xvalues(用std::move()标记的对象)传递给rvalue引用。\par
+
+通常可以忽略表的最后一列，因为\textit{const} rvalue引用在语义上没有多大意义，这意味着我们有以下规则:\par
+
+表8.1 绑定引用规则表
+
+\myGraphic{0.8}{images/chapter8/3}{}
+
+\begin{itemize}
+  \item 非\textit{const} lvalue引用只接受非\textit{const} lvalue。
+  \item rvalue引用只接受非\textit{const} rvalue。
+  \item \textit{const} lvalue引用可以接受所有内容，并在没有提供其他重载的情况下充当备选机制。
+\end{itemize}
+
+下面是从表中提取的移动语义的备选机制规则:\par
+
+\myGraphic{0.6}{images/chapter8/4}{}
+
+如果向函数传递rvalue(临时对象或标记为\textit{std::move()}的对象)，而移动语义没有特定的实现(通过接受rvalue引用声明)，则使用通常的复制语义，\textit{const}\&接受实参。\par
+
+请注意，在介绍通用引用/转发引用时会扩展此表。\par
+
+有时可以将lvalue传递给rvalue引用(当使用模板形参时)。请注意，并非每个带有\&\&的声明都遵循相同的规则。这里的规则适用于使用\&\&声明类型(或类型别名)的情况。\par
+
+\mySmallsection{8.3.2 通过引用和值进行重载}
+
+可以通过引用和值来声明函数:\par
+
+\begin{codebox}[cpp]
+void f(X); // call-by-value
+void f(const X&); // call-by-reference
+void f(X&);
+void f(X&&);
+void f(const X&&);
+\end{codebox}
+
+原则上，这些重载的声明没问题。但是，按值调用和按引用调用之间没有特定的优先级。如果函数声明以值作为参数(它可以接受任何值类别的任何参数)，那么任何匹配声明以引用作为参数都会造成歧义。\par
+
+因此，只能通过值或引用(使用认为有用的尽可能多的引用重载)接受参数，但永远不要两者都接受。\par
+
+
+\section{当lvalue变成rvalue}
+
+当使用具体类型的rvalue引用形参声明函数时，只能将这些形参绑定到rvalue。例如:\par
+
+\begin{codebox}[cpp]
+void rvFunc(std::string&&); // forward declaration
+
+std::string s{ ... };
+rvFunc(s); // ERROR: passing an lvalue to an rvalue reference
+rvFunc(std::move(s)); // OK, passing an xvalue
+\end{codebox}
+
+但请注意，有时传递lvalue是可行的。例如:\par
+
+\begin{codebox}[cpp]
+void rvFunc(std::string&&); // forward declaration
+
+rvFunc("hello"); // OK, although "hello" is an lvalue
+\end{codebox}
+
+记住，字符串文字作为表达式使用时是lvalue。因此，不能传递给rvalue引用。但是，这里涉及到一个隐藏的操作，因为实参的类型(6个常量字符的数组)与形参的类型不匹配。隐式类型转换由string构造函数执行，创建了一个没有名称的临时对象。\par
+
+因此，真正的使用方式如下:\par
+
+\begin{codebox}[cpp]
+void rvFunc(std::string&&); // forward declaration
+
+rvFunc(std::string{"hello"}); // OK, "hello" converted to a string is a prvalue
+\end{codebox}
+
+
+\section{当rvalue变成lvalue}
+
+现在让了解一下将形参声明为rvalue引用的函数的实现:\par
+
+\begin{codebox}[cpp]
+void rvFunc(std::string&& str) {
+  ...
+}
+\end{codebox}
+
+只能传递rvalue:\par
+
+\begin{codebox}[cpp]
+std::string s{ ... };
+rvFunc(s); // ERROR: passing an lvalue to an rvalue reference
+rvFunc(std::move(s)); // OK, passing an xvalue
+rvFunc(std::string{"hello"}); // OK, passing a prvalue
+\end{codebox}
+
+然而，当在函数内部使用\textit{str}形参时，处理的是有名称的对象。这意味着使用\textit{str}作为lvalue。\par
+
+不能直接递归地调用自己的函数:\par
+
+\begin{codebox}[cpp]
+void rvFunc(std::string&& str) {
+  rvFunc(str); // ERROR: passing an lvalue to an rvalue reference
+}
+\end{codebox}
+
+必须再次用\textit{std::move()}标记\textit{str}:\par
+
+\begin{codebox}[cpp]
+void rvFunc(std::string&& str) {
+  rvFunc(std::move(str)); // OK, passing an xvalue
+}
+\end{codebox}
+
+这是没有传递移动语义规则的规范。这是特性，而不是bug。如果传递了移动语义，就不能使用两次传递了移动语义的对象，因为第一次使用后，就会失去它的值。或者，需要临时禁用移动语义的特性。\par
+
+如果将rvalue引用参数绑定到rvalue(prvalue或xvalue)，该对象将作为lvalue，必须再次将其转换为rvalue，以便传递给rvalue引用。\par
+
+现在，请记住\textit{std::move()}只不过是对rvalue引用的\textit{static\_\allowbreak{}cast}。也就是说，可以在递归调用中编写如下程序:\par
+
+\begin{codebox}[cpp]
+void rvFunc(std::string&& str) {
+  rvFunc(static_cast<std::string&&>(str)); // OK, passing an xvalue
+}
+\end{codebox}
+
+将对象\textit{str}转换为string类型。通过强制转换，改变值的类型。根据规则，通过对rvalue引用的强制转换，lvalue变成了xvalue，因此允许将对象传递给rvalue引用。\par
+
+这并不是什么新鲜事:即使在C++11之前，声明为lvalue引用的形参在使用时也遵循lvalue规则。关键是声明中的引用指定了可以传递给函数的内容。对于函数内部的行为，与引用无关。\par
+
+困惑吗?这就是在C++标准中定义移动语义和值类型的规则。是否有足够的了解，其实并不重要，编译器明白这些规则其实就足够了。\par
+
+这里需要了解的是移动语义没有传递。如果传递一个带有移动语义的对象，必须再次用\textit{std::move()}标记，将其语义转发给另一个函数。\par
+
+
+\section{使用decltype检查值类别}
+
+与移动语义一起，C++11引入了一个新的关键字decltype。这个关键字的主要目标是获得声明对象的确切类型，也可以用于确定表达式的值类型。\par
+
+\mySmallsection{8.6.1 使用decltype检查名称的类型}
+
+在接受rvalue引用形参的函数中，可以使用decltype查询并使用形参的确切类型。只需将参数的名称传递给decltype。例如:\par
+
+\begin{codebox}[cpp]
+void rvFunc(std::string&& str)
+{
+  std::cout << std::is_same<decltype(str), std::string>::value; // false
+  std::cout << std::is_same<decltype(str), std::string&>::value; // false
+  std::cout << std::is_same<decltype(str), std::string&&>::value; // true
+  std::cout << std::is_reference<decltype(str)>::value; // true
+  std::cout << std::is_lvalue_reference<decltype(str)>::value; // false
+  std::cout << std::is_rvalue_reference<decltype(str)>::value; // true
+}
+\end{codebox}
+
+decltype(str)表达式总是表示\textit{str}的类型，即std::string\&\&。在表达式中任何需要该类型的地方都可以使用该类型。类型特征(类型函数如std::is\_same<>)会帮助我们处理这些类型。\par
+
+例如，要声明传递的形参类型不是引用的新对象，可以声明:\par
+
+\begin{codebox}[cpp]
+void rvFunc(std::string&& str)
+{
+  std::remove_reference<decltype(str)>::type tmp;
+  ...
+}
+\end{codebox}
+
+\textit{tmp}在这个函数中是std::string类型(也可以显式地声明，如果使它成为T类型对象的泛型函数，代码仍可以工作)。\par
+
+\mySmallsection{8.6.2 使用decltype检查值类型}
+
+目前为止，只向decltype传递了名称来查询类型。但是，也可以将表达式(不仅仅是名称)传递给decltype，会根据以下约定生成值类型:\par
+
+\begin{itemize}
+  \item 对于prvalue，产生值类型:type
+  \item 对于lvalue，将其类型作为lvalue引用:type\&
+  \item 对于xvalue，将其类型作为rvalue引用:type\&\&
+\end{itemize}
+
+例如:\par
+
+\begin{codebox}[cpp]
+void rvFunc(std::string&& str)
+{
+  decltype(str + str) // yields std::string because s+s is a prvalue
+  decltype(str[0]) // yields char& because the index operator yields an lvalue
+  ...
+}
+\end{codebox}
+
+这意味着，如果只是传递一个放在圆括号内的名称(这是一个表达式，而不再只是名称)，decltype将生成其类型。行为如下:\par
+
+\begin{codebox}[cpp]
+void rvFunc(std::string&& str)
+{
+  std::cout << std::is_same<decltype((str)), std::string>::value; // false
+  std::cout << std::is_same<decltype((str)), std::string&>::value; // true
+  std::cout << std::is_same<decltype((str)), std::string&&>::value; // false
+  std::cout << std::is_reference<decltype((str))>::value; // true
+  std::cout << std::is_lvalue_reference<decltype((str))>::value; // true
+  std::cout << std::is_rvalue_reference<decltype((str))>::value; // false
+}
+\end{codebox}
+
+将此函数与不使用括号的前一个函数实现进行比较。这里，decltype(str)的结果是std::string\&，因为str是lvalue的std::string类型。\par
+
+对于decltype，当传递的名称周围加上圆括号时，会产生不同的结果，这在稍后讨论decltype(auto)时会很重要。\par
+
+\mySmallsection{检查值类型内部代码}
+
+现在可以在代码中检查特定的值类别，如下所示:\par
+
+\begin{itemize}
+  \item !std::is\_reference\_v<decltype((expr))>
+  检查expr是否为prvalue。
+  \item std::is\_lvalue\_reference\_v<decltype((expr))>
+  检查expr是否为lvalue。
+  \item std::is\_rvalue\_reference\_v<decltype((expr))>
+  检查expr是否为xvalue。
+  \item !std::is\_lvalue\_reference\_v<decltype((expr))>
+  检查expr是否为rvalue。
+\end{itemize}
+
+请再次注意这里使用的括号，以确保即使只传递名称\textit{expr}，也使用decltype的值-类别检查形式。\par
+
+C++20之前，必须使用::value来替代后缀\_v。\par
+
+
+\section{总结}
+
+\begin{itemize}
+  \item C++程序中的任何表达式都只属于以下主要值类别中的一种:
+  \begin{itemize}
+    \item[-] lvalue (用于命名对象或字符串字面量)
+    \item[-] prvalue (用于未命名的临时对象)
+    \item[-] xvalue (对于标记为\textit{std::move()}的对象)
+  \end{itemize}
+  \item C++中的调用或操作是否有效取决于类型和值类别。
+  \item 类型的rvalue引用只能绑定到rvalue(prvalues或xvalues)。
+  \item 隐式操作可能更改传递参数的值类别。
+  \item 将rvalue传递给rvalue引用，可以将其绑定到lvalue。
+  \item 移动语义不可传递。
+  \item 函数和对函数的引用总是lvalue。
+  \item 对于rvalue(临时对象或标记为\textit{std::move()}的对象)，普通值成员具有移动语义，而引用或静态成员没有。
+  \item decltype既可以检查所传递名称的声明类型，也可以检查所传递表达式的类型和值类别。
+\end{itemize}

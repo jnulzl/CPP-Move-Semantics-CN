@@ -1,0 +1,667 @@
+% 第 7 章 移动语义和noexcept（由 tools/convert.py 从原 content/ 自动生成，勿手改）
+
+移动语义在C++11中非常完整时，我们发现了一个问题:vector重新分配时，不能使用移动语义。因此，引入了新的关键字noexcept。\par
+
+本章就来解释这个问题，以及使用noexcept意味着什么。\par
+
+
+\section{移动构造函数有和没有noexcept的区别}
+
+通过使用noexcept关键字的示例来开始这个主题。\par
+
+\mySmallsection{7.1.1 无noexcept的移动构造函数}
+
+下面的类，引入了带有string成员的类型，并实现了复制和移动构造函数:\par
+
+\begin{codeboxt}[cpp]{basics/person.hpp}
+#include <string>
+#include <iostream>
+
+class Person {
+  private:
+  std::string name;
+  public:
+  Person(const char* n)
+  : name{n} {
+  }
+
+  std::string getName() const {
+    return name;
+  }
+
+  // print out when we copy or move:
+  Person(const Person& p)
+  : name{p.name} {
+    std::cout << "COPY " << name << '\n';
+  }
+  Person(Person&& p)
+  : name{std::move(p.name)} {
+    std::cout << "MOVE " << name << '\n';
+  }
+  ...
+};
+\end{codeboxt}
+
+现在创建并初始化一个\textit{Person}的vector，并插入一个\textit{Person}对象:\par
+
+\begin{codeboxt}[cpp]{basics/person.cpp}
+#include "person.hpp"
+#include <iostream>
+#include <vector>
+
+int main()
+{
+  std::vector<Person> coll{"Wolfgang Amadeus Mozart",
+    "Johann Sebastian Bach",
+    "Ludwig van Beethoven"};
+  std::cout << "capacity: " << coll.capacity() << '\n';
+  coll.push_back("Pjotr Iljitsch Tschaikowski");
+}
+\end{codeboxt}
+
+程序输出如下:\par
+
+\begin{myOutput}
+COPY Wolfgang Amadeus Mozart \\
+COPY Johann Sebastian Bach \\
+COPY Ludwig van Beethoven \\
+capacity: 3 \\
+MOVE Pjotr Iljitsch Tschaikowski \\
+COPY Wolfgang Amadeus Mozart \\
+COPY Johann Sebastian Bach \\
+COPY Ludwig van Beethoven
+\end{myOutput}
+
+首先，将初始值复制到vector中(容器的std::initializer\_list<>构造函数按值接受传递的参数)。因此，vector通常为三个元素分配内存:\par
+
+\myGraphic{1.0}{images/chapter7/1}{}
+
+接下来会发生什么:用push\_back()插入第四个元素，结果如下:\par
+
+\begin{itemize}
+  \item vector在内部需要更多内存，所以会分配新的内存(比如，6个元素)，移动第4个字符串(创建一个临时的\textit{Person}并使用\textit{push\_\allowbreak{}back(\allowbreak{})\allowbreak{}}方法将其移动到vector中)，但也会将现有的元素复制到新内存中:\par
+\myGraphic{1.0}{images/chapter7/2}{}
+  \item 这个操作结束时，vector销毁旧的元素，释放这些元素的旧内存，并更新成员:\par
+\myGraphic{1.0}{images/chapter7/3}{}
+\end{itemize}
+
+问题是，为什么vector不使用移动构造函数，将元素从旧内存移动到新内存呢?\par
+
+\mySmallsection{强异常安全保证}
+
+vector的重新分配不使用移动语义的原因是，\textit{push\_\allowbreak{}back(\allowbreak{})\allowbreak{}}提供了强异常处理保证:在vector的重新分配过程中抛出异常时，C++标准库保证将vector回退到之前的状态。也就是说，\textit{push\_\allowbreak{}back(\allowbreak{})\allowbreak{}}提供了一种保证:要么成功，要么无效。\par
+
+C++标准能够在C++98和C++03中提供这种保证，因为C++只能复制元素。如果在复制元素时出现错误，源对象仍然可用。处理异常的内部代码只需销毁创建的副本，并释放新的内存，使vector返回到之前的状态(C++标准库要求析构函数不抛出异常;否则，无法回退)。\par
+
+重新分配是使用移动语义的最优位置，因为只是元素从一个位置移动到另一个位置。因此，C++11希望在这里使用移动语义。但是，如果在重新分配期间抛出异常，就无法回退了。新内存中的元素已经窃取了旧内存中元素的值。因此，只是销毁新的元素还不够，还得把他们移回去。但怎么知道把移回去的时候就不会失败呢?\par
+
+你可能会说一个移动构造函数永远不抛出异常。这可能是正确的字符串(因为我们只是移动值和指针)，而是需要对象在一个有效的状态，这种状态可能需要额外的内存，所以当额外内存有问题时会丢弃状态信息(例如，基于节点的容器Visual C++实现方式)。\par
+
+我们也不能放弃，因为程序可能已经使用这个特性来避免创建向量的备份，而丢失数据可能是(安全)关键的。不再支持push\_back()对于使用C++11来说将是个噩梦。\par
+
+最后，只有当元素类型的移动构造函数保证不抛出异常时，才在重新分配时使用移动语义。\par
+
+\mySmallsection{7.1.2 使用noexcept的移动构造函数}
+
+因此，保证\textit{Person}类的移动构造函数永远不会抛出异常时，示例程序就改变了行为:\par
+
+\begin{codeboxt}[cpp]{basics/personmove.hpp}
+#include <string>
+#include <iostream>
+
+class Person {
+  private:
+  std::string name;
+  public:
+  Person(const char* n)
+  : name{n} {
+  }
+  std::string getName() const {
+    return name;
+  }
+
+  // print out when we copy or move:
+  Person(const Person& p)
+  : name{p.name} {
+    std::cout << "COPY " << name << '\n';
+  }
+  Person(Person&& p) noexcept // guarantee not to throw
+  : name{std::move(p.name)} {
+    std::cout << "MOVE " << name << '\n';
+  }
+  ...
+};
+\end{codeboxt}
+
+如果像以前一样使用\textit{Persons}:\par
+
+\begin{codeboxt}[cpp]{basics/personmove.cpp}
+#include "personmove.hpp"
+#include <iostream>
+#include <vector>
+
+int main()
+{
+  std::vector<Person> coll{"Wolfgang Amadeus Mozart",
+    "Johann Sebastian Bach",
+    "Ludwig van Beethoven"};
+  std::cout << "capacity: " << coll.capacity() << '\n';
+  coll.push_back("Pjotr Iljitsch Tschaikowski");
+}
+\end{codeboxt}
+
+可得到以下输出:\par
+
+\begin{myOutput}
+COPY Wolfgang Amadeus Mozart \\
+COPY Johann Sebastian Bach \\
+COPY Ludwig van Beethoven \\
+capacity: 3 \\
+MOVE Pjotr Iljitsch Tschaikowski \\
+MOVE Wolfgang Amadeus Mozart \\
+MOVE Johann Sebastian Bach \\
+MOVE Ludwig van Beethoven
+\end{myOutput}
+
+同样，首先将初始值复制到vector中\par
+
+\myGraphic{1.0}{images/chapter7/4}{}
+
+然而，随着输出的最后三行可视化，vector现在使用移动构造函数将元素移动到新的重新分配的内存中:\par
+
+\myGraphic{1.0}{images/chapter7/5}{}
+
+最后，vector只需要释放旧内存并更新其成员:\par
+
+\myGraphic{1.0}{images/chapter7/6}{}
+
+\mySmallsection{具有条件的noexcept声明}
+
+然而，是否可以将移动构造函数标记为noexcept?移动\textit{name}(一个std::string)，并向标准输出流写入一些内容。如果在那里抛出异常，就违反了无异常的保证。这种情况下，程序在运行时将调用std::terminate()，后者通常调用std::abort()来发出程序异常结束的信号(通常会出现core dump)。\par
+
+因此，如果string成员和输出操作不抛出异常，则应该保证不抛出异常。引入noexcept关键字是用来指定不抛出的条件保证。(\texttt{basics/\allowbreak{}personcond.hpp}是一个完整的例子):\par
+
+\begin{codebox}[cpp]
+class Person {
+  private:
+    std::string name;
+  public:
+    ...
+    Person(Person&& p)
+    noexcept(std::is_nothrow_move_constructible_v<std::string>
+    && noexcept(std::cout << name))
+    : name{std::move(p.name)} {
+      std::cout << "MOVE " << name << '\n';
+    }
+    ...
+\end{codebox}
+
+使用noexcept(…)，保证括号内的编译时表达式为真时不会抛出异常。这种情况下，需要两样东西来保证:\par
+
+\begin{itemize}
+  \item 对于std::is\_nothrow\_move\_constructible\_v<std::string>(在C++20之前，必须使用std::is\_nothrow\_move\_constructible<std::string>::value)，使用标准类型特征(type)来告诉std::string的移动构造函数是否保证不抛出异常。
+  \item 对于noexcept(std::cout << name)，对名称的输出表达式是否保证不抛出异常。这里，使用noexcept作为操作符，说明是否所有执行传递的表达式都保证不会抛出异常。
+\end{itemize}
+
+通过此声明，重新分配将再次使用复制构造函数。字符串的移动构造函数不保证抛出异常，但输出操作符不保证抛出异常。然而，移动构造函数通常不输出任何内容。因此，通常当成员不抛出异常时，可以为整个移动构造函数提供不抛出异常的保证。\par
+
+好消息是，如果没有自己实现移动构造函数，编译器将为你提供noexcept保证。对于所有成员都保证不抛出移动构造函数的类，生成的或默认的移动构造函数将作为整体提供保证。\par
+
+考虑下面的声明:\par
+
+\begin{codeboxt}[cpp]{basics/persondefault.hpp}
+#include <string>
+#include <iostream>
+
+class Person {
+  private:
+  std::string name;
+  public:
+  Person(const char* n)
+  : name{n} {
+  }
+
+  std::string getName() const {
+    return name;
+  }
+
+  // print out when we copy:
+  Person(const Person& p)
+  : name{p.name} {
+    std::cout << "COPY " << name << '\n';
+  }
+  // force default generated move constructor:
+  Person(Person&& p) = default;
+  ...
+};
+\end{codeboxt}
+
+这种情况下，应该生成默认的移动构造函数:\par
+
+\begin{codebox}[cpp]
+class Person {
+  ...
+  // force default generated move constructor:
+  Person(Person&& p) = default;
+  ...
+};
+\end{codebox}
+
+这意味着只有在复制时才输出。当使用生成的移动构造函数时，只是没有执行复制。\par
+
+现在用常用的程序在末尾打印一些\textit{Persons}:\par
+
+\begin{codeboxt}[cpp]{basics/persondefault.cpp}
+#include "persondefault.hpp"
+#include <iostream>
+#include <vector>
+
+int main()
+{
+  std::vector<Person> coll{"Wolfgang Amadeus Mozart",
+    "Johann Sebastian Bach",
+    "Ludwig van Beethoven"};
+  std::cout << "capacity: " << coll.capacity() << '\n';
+  coll.push_back("Pjotr Iljitsch Tschaikowski");
+
+  std::cout << "name of coll[0]: " << coll[0].getName() << '\n';
+}
+\end{codeboxt}
+
+会得到以下输出:\par
+
+\begin{myOutput}
+COPY Wolfgang Amadeus Mozart \\
+COPY Johann Sebastian Bach \\
+COPY Ludwig van Beethoven \\
+capacity: 3 \\
+name of coll[0]: Wolfgang Amadeus Mozart
+\end{myOutput}
+
+只看到初始化器列表中元素的副本。对于其他任何的操作，包括重新分配，都使用默认的移动构造函数。在重新分配的内存中，第一个人名是正确的。\par
+
+如果不指定任何成员函数，则具有相同的行为:\par
+
+\begin{itemize}
+  \item 如果实现了移动构造函数，应该声明它是否，以及何时保证不会抛出异常。
+  \item 如果不需要实现移动构造函数，根本不需要指定任何东西。
+\end{itemize}
+
+如果类的性能或该类的重新分配对象很重要，开发者可能还想在编译时再次检查类的移动构造函数，是否保证不会抛出异常:\par
+
+\begin{codebox}[cpp]
+static_assert(std::is_nothrow_move_constructible_v<Person>);
+\end{codebox}
+
+或升级到C++17:\par
+
+\begin{codebox}[cpp]
+static_assert(std::is_nothrow_move_constructible<Person>::value, "");
+\end{codebox}
+
+\mySmallsection{7.1.3 值得使用noexcept吗？}
+
+您可能想知道用或多或少的noexcept表达式声明移动构造函数是否值得使用。Howard Hinnant用一个简单的程序演示了这种效果(本书中进行了简单的改编):\par
+
+\begin{codeboxt}[cpp]{basics/movenoexcept.cpp}
+#include <iostream>
+#include <string>
+#include <vector>
+#include <chrono>
+
+// string wrapper with move constructor:
+struct Str
+{
+  std::string val;
+  // ensure each string has 100 characters:
+  Str()
+  : val(100, 'a') { // don’t use braces here
+  }
+
+  // enable copying:
+  Str(const Str&) = default;
+
+  // enable moving (with and without noexcept):
+  Str (Str&& s) NOEXCEPT
+  : val{std::move(s.val)} {
+  }
+};
+
+int main()
+{
+  // create vector of 1 Million wrapped strings:
+  std::vector<Str> coll;
+  coll.resize(1000000);
+
+  // measure time to reallocate memory for all elements:
+  auto t0 = std::chrono::steady_clock::now();
+  coll.reserve(coll.capacity() + 1);
+  auto t1 = std::chrono::steady_clock::now();
+
+  std::chrono::duration<double, std::milli> d{t1 - t0};
+  std::cout << d.count() << "ms\n";
+}
+\end{codeboxt}
+
+提供了一个类来包装长度有效的字符串(以避免小字符串优化)。注意，必须用圆括号初始化，因为大括号会将100解释为值为100的初始字符。\par
+
+类中用NOEXCEPT标记移动构造函数，预处理程序可以用空或noexcept (例如，用-DNOEXCEPT=NOEXCEPT编译)进行替换。然后，再看看重新分配vector中的100万个对象需要多长时间。\par
+
+几乎所有平台上，声明noexcept的移动构造函数会使重新分配速度提高10倍(确保使用了相应的编译优化级别)。也就是说，重新分配(通常通过插入新元素强制执行)可能需要20毫秒，而不是200毫秒。这意味着减少了180毫秒，不能使用任何其他向量，这对于性能来说是巨大的收益。\par
+
+
+\section{noexcept声明的细节}
+
+正如所见，noexcept的引入是为了允许条件保证不抛出异常。通常，在编译时知道函数不能抛出异常可以改进代码和优化，因为不必处理由于抛出异常而进行的清理。注意，如果违反了noexcept保证，程序会调用std::terminate()，而后者通常会调用std::abort()来导致“异常的程序终止”(例如，core dump)。\par
+
+\mySmallsection{7.2.1 声明noexcept的函数的规则}
+
+当声明noexcept条件时，有几个适用的规则:\par
+
+\begin{itemize}
+  \item noexcept条件必须是编译时表达式，该表达式的值可转换为bool类型。
+  \item 不能重载不同条件的函数。
+  \item 在类层次结构中，noexcept条件是接口的一部分。用不是noexcept的函数覆盖不是noexcept的基类函数是错误的。
+\end{itemize}
+
+例如:\par
+
+\begin{codebox}[cpp]
+class Base {
+  public:
+  ...
+  virtual void foo(int) noexcept;
+  virtual void foo(int); // ERROR: overload on different noexcept clause only
+  virtual void bar(int);
+};
+
+class Derived : public Base {
+  public:
+  ...
+  virtual void foo(int) override; // ERROR: override giving up the noexcept guarantee
+  virtual void bar(int) noexcept; // OK (here we also guarantee not to throw)
+};
+\end{codebox}
+
+但是，对于非虚函数，派生类成员可以使用不同的noexcept声明隐藏基类成员:\par
+
+\begin{codebox}[cpp]
+class Base {
+  public:
+  ...
+  void foo(int) noexcept;
+};
+
+class Derived : public Base {
+  public:
+  ...
+  void foo(int); // OK, hiding instead of overriding
+};
+\end{codebox}
+
+条件在编译时计算后遵循相同的规则。例如，考虑以下类的层次结构:\par
+
+\begin{codebox}[cpp]
+class Base {
+  public:
+  virtual void func() noexcept(sizeof(int) < 8); // might throw if sizeof(int) >= 8
+};
+
+class Derived : public Base {
+  public:
+  void func() noexcept(sizeof(int) < 4) override; // might throw if sizeof(int) >= 4
+};
+\end{codebox}
+
+这种情况下，如果int的大小为4，将出现编译时错误，因为基类保证在调用\textit{func()}时不抛出，而派生类不再为\textit{func()}提供这种保证。当int的大小小于4时，两者都是noexcept，这挺不错。当int的大小至少为8时，两者都不是noexcept，这也没问题。因此，派生类只需要进一步限制异常保证。\par
+
+\mySmallsection{7.2.2 noexcept的特殊成员函数}
+
+不能为特殊成员函数自动生成条件。\par
+
+\mySmallsection{noexcept的复制和移动特殊成员函数}
+
+按照规则，当生成但未实现特殊成员函数时，将生成noexcept条件。这种情况下，如果对所有基类和非静态成员使用相应操作应该保证不抛出异常。\par
+
+例如:\par
+
+\begin{codeboxt}[cpp]{basics/specialnoexcept.cpp}
+#include <iostream>
+#include <type_traits>
+
+class B
+{
+  std::string s;
+};
+
+int main()
+{
+  std::cout << std::boolalpha;
+  std::cout << std::is_nothrow_default_constructible<B>::value << '\n';
+  std::cout << std::is_nothrow_copy_constructible<B>::value << '\n';
+  std::cout << std::is_nothrow_move_constructible<B>::value << '\n';
+  std::cout << std::is_nothrow_copy_assignable<B>::value << '\n';
+  std::cout << std::is_nothrow_move_assignable<B>::value << '\n';
+}
+\end{codeboxt}
+
+程序输出如下:\par
+
+\begin{myOutput}
+true \\
+false \\
+true \\
+false \\
+true
+\end{myOutput}
+
+生成的复制构造函数和复制赋值操作符可能会抛出异常，因为复制std::string可能会抛出异常。但生成的默认构造函数、移动构造函数和移动赋值操作符保证不会抛出异常，因为类std::string的默认构造函数、移动构造函数和移动赋值操作符保证不会抛出异常。\par
+
+请注意，noexcept条件甚至在这些特殊成员函数使用\textit{=default}进行声明时也会生成。因此，如果像下面这样声明B类，效果是一样的:\par
+
+\begin{codebox}[cpp]
+class B
+{
+  std::string s;
+public:
+  B(const B&) = default; // noexcept condition automatically generated
+  B(B&&) = default; // noexcept condition automatically generated
+  B& operator= (const B&) = default; // noexcept condition automatically generated
+  B& operator= (B&&) = default; // noexcept condition automatically generated
+};
+\end{codebox}
+
+当有一个默认的特殊成员函数时，可以显式地指定不同于生成的noexcept保证。例如:\par
+
+\begin{codebox}[cpp]
+class C
+{
+  ...
+public:
+  C(const C&) noexcept = default; // guarantees not to throw (OK since C++20)
+  C(C&&) noexcept(false) = default; // specifies that it might throw (OK since C++20)
+  ...
+};
+\end{codebox}
+
+C++20之前，如果生成的noexcept条件与指定的noexcept条件相矛盾，则删除已定义的函数。\par
+
+\mySmallsection{noexcept的析构函数}
+
+按照规则，析构函数总是保证在默认情况下不会抛出异常。这既适用于生成的析构函数，也适用于实现的析构函数。\par
+
+例如:\par
+
+\begin{codebox}[cpp]
+class B
+{
+  std::string s;
+  public:
+  ...
+  ~B() { // automatically always declared as ~B() noexcept
+    ...
+  }
+};
+\end{codebox}
+
+对于noexcept(false)，可以在没有这个保证的情况下进行声明，但这通常没有意义，因为C++标准库保证析构函数从不抛出异常。\par
+
+
+\section{noexcept在类中的声明}
+
+可以看到，特别是必须实现一个移动构造函数时，应该用noexcept保证来声明。通常，遵循C++标准的规则，当所有基类和所有成员类型在移动赋值时都没有抛出异常时，应该声明为noexcept。\par
+
+通常的模式如下:\par
+
+\begin{codebox}[cpp]
+class Base {
+  ...
+};
+
+class Drv : public Base {
+  MemType member;
+  ...
+  // move constructor:
+  Drv(Drv&&) noexcept(std::is_nothrow_move_constructible_v<Base> &&
+  std::is_nothrow_move_constructible_v<MemType>);
+};
+\end{codebox}
+
+这里，\textit{Drv}类的移动构造函数保证，如果基类\textit{Base}和成员类型\textit{MemType}提供了这个保证，则不会抛出异常。\par
+
+移动赋值操作符可能使用相同的模式。但请注意，多态类型中应该删除移动赋值操作符，所以通常不需要在派生类中实现它们。\par
+
+\mySmallsection{7.3.1 检查抽象基类中的移动构造函数}
+
+请注意，类型特征std::is\_nothrow\_move\_constructible<>并不会总如预期。对于抽象基类，总是产生\textit{false}，因为还会检查是否可以用移动构造函数创建该类型的对象，而这对于抽象类型是不可能的。\par
+
+因此，“如果抽象基类保证不抛出异常，则继承类也应该保证不抛出异常”的声明不能使用标准类型特征来表述。通常，只需(必须)知道基类的移动构造函数是否可能抛出。\par
+
+为了能够检查一个类的移动构造函数是否保证不会抛出，可以实现以下helper类型特征(使用C++20实现)。但请注意，必须为每个纯虚函数提供实现:\par
+
+\begin{codeboxt}[cpp]{poly/isnothrowmovable.hpp}
+// type trait to check whether a base class guarantees not to throw
+// in the move constructor (even if the constructor is not callable)
+#ifndef IS_NOTHROW_MOVABLE_HPP
+#define IS_NOTHROW_MOVABLE_HPP
+
+#include <type_traits>
+
+template<typename Base>
+struct Wrapper : Base {
+  using Base::Base;
+  // implement all possibly wrapped pure virtual functions:
+  void print() const {}
+  ...
+};
+
+template<typename T>
+static constexpr inline bool is_nothrow_movable_v
+  = std::is_nothrow_move_constructible_v<Wrapper<T>>;
+
+#endif // IS_NOTHROW_MOVABLE_HPP
+\end{codeboxt}
+
+现在甚至可以检查抽象基类的移动构造函数是否为noexcept。下面的程序演示了标准和用户定义的类型特征的不同行为:\par
+
+\begin{codeboxt}[cpp]{poly/isnothrowmovable.cpp}
+#include "isnothrowmovable.hpp"
+#include <iostream>
+
+class Base {
+  std::string id;
+  ...
+public:
+  virtual void print() const = 0; // pure virtual function (forces abstract base class)
+  ...
+  virtual ~Base() = default;
+  protected:
+  // protected copy and move semantics (also forces abstract base class):
+  Base(const Base&) = default;
+  Base(Base&&) = default;
+  // disable assignment operator (due to the problem of slicing):
+  Base& operator= (Base&&) = delete;
+  Base& operator= (const Base&) = delete;
+};
+
+int main()
+{
+  std::cout << std::boolalpha;
+  std::cout << "std::is_nothrow_move_constructible_v<Base>: "
+  << std::is_nothrow_move_constructible_v<Base> << '\n';
+  std::cout << "is_nothrow_movable_v<Base>: "
+  << is_nothrow_movable_v<Base> << '\n';
+}
+\end{codeboxt}
+
+该程序有以下输出:\par
+
+\begin{myOutput}
+std::is\_nothrow\_move\_constructible<Base>: false \\
+is\_nothrow\_movable<Base>: true
+\end{myOutput}
+
+因此，如果必须在抽象基类派生的类中实现移动构造函数，可以使用helper类型特征来声明移动构造函数。如下所示:\par
+
+\begin{codebox}[cpp]
+class Drv : public Base {
+  MemType member;
+  ...
+  // move constructor:
+  Drv(Drv&&) noexcept(is_nothrow_movable_v<Base> &&
+  is_nothrow_movable_v<MemType>);
+};
+\end{codebox}
+
+由于不需要实现所有纯虚函数，C++标准中会缺少编译器支持的类型特征。\par
+
+
+\section{何时何地使用noexcept}
+
+noexcept在C++11中引入，是为了解决在vector中重新分配元素时不能使用移动语义的问题。\par
+
+原则上，可以用noexcept(条件式)标记每个函数。这不仅有助于像vector重新分配这样的情况(注意，移动构造函数可能会调用其他需要noexcept保证的函数)，还有助于编译器优化代码，因为不需要生成代码来处理异常。所以问题是，应该在哪使用noexcept?\par
+
+对于C++11标准库，会急于确定将noexcept放在哪里(重新分配问题很晚才发现，noexcept的最终语义在发布C++11的那一周才解释清楚)。因此，遵循\texthref{http://wg21.link/n3279}中提出方案是一种相当保守的方法，但对代码编写是一个有用的指导方针。大致来说，指导方针为:\par
+
+\begin{itemize}
+  \item 每个库的工作组同意不能抛出异常，且具有“广泛契约”的库函数(即，由于前提条件而没有指定未定义的行为)都应该标记为“无条件的noexcept”。
+  \item 如果库中的交换函数、移动构造函数或移动赋值操作符是“条件宽松”的(即，可以通过应用noexcept操作符保证不抛出异常)，则应将其标记为有条件的noexcept。任何其他函数都不应该使用条件noexcept。
+  \item 任何标准库析构函数都不应该抛出异常，应该使用隐式提供的(非抛出的)异常规范。
+  \item 为兼容C代码而设计的库函数，可以标记为无条件的noexcept。
+\end{itemize}
+
+下面的例子阐明了第一项的意思:\par
+
+\begin{itemize}
+  \item 对于容器和字符串，成员函数empty()和clear()标记为noexcept，因为没有方法来实现它们并抛出异常。
+  \item 即使在正确使用时保证不会抛出异常，vector和string的索引操作符不会标记为noexcept。然而，当传递无效索引时，会出现有未定义的行为。不使用noexcept来声明时，这些实现会在这种情况下抛出异常。
+\end{itemize}
+
+第二项是在实现移动语义时应该遵循的指导原则。建议只在实现移动构造函数、移动赋值操作符或swap()函数时，使用条件noexcept。对于所有其他函数，考虑态详细的条件，可能会透露太多的实现细节。\par
+
+对于\texthref{http://wg21.link/p0884}，包装类型也应该有条件noexcept声明:\par
+
+\begin{itemize}
+  \item 如果标准库类型具有包装语义，以提供与底层类型相同的行为，则默认构造函数、复制构造函数和复制赋值操作符应有条件地标记为noexcept，而底层异常规范仍然有效。
+\end{itemize}
+
+最后，请注意，根据规则，任何析构函数都总是隐式声明为noexcept。\par
+
+代码的应该这么写:\par
+
+\begin{itemize}
+  \item 应该实现移动构造函数、移动赋值操作符和一个带有noexcept(条件)的swap()函数。
+  \item 对于所有其他函数，在知道不能抛出异常时，就使用无条件的noexcept。
+  \item 析构函数不需要noexcept规范。
+\end{itemize}
+
+
+\section{总结}
+
+\begin{itemize}
+  \item 使用noexcept，可以(有条件的)保证不抛出异常。
+  \item 如果实现了移动构造函数、移动赋值操作符或swap()，可以用(有条件的)noexcept表达式进行声明。
+  \item 对于其他函数，如果从不抛出异常，可以用无条件的noexcept标记。
+  \item 析构函数总是使用noexcept来声明(即使是在实现的时候)。
+\end{itemize}

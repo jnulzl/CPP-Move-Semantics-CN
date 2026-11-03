@@ -1,0 +1,552 @@
+% 第 9 章 完美转发（由 tools/convert.py 从原 content/ 自动生成，勿手改）
+
+本章介绍泛型代码中的移动语义。特别讨论了通用引用(转发引用)和完美转发。\par
+
+接下来的内容将讨论引用和完美转发的细节，以及如何处理泛型代码中的移动返回值。\par
+
+
+\section{完美转发的动机}
+
+知道了移动语义不能自动传递，所以对泛型代码会有影响。\par
+
+\mySmallsection{9.1.1 为什么需要完美转发}
+
+要将带有移动语义的对象转发给函数，不仅需要绑定到rvalue引用，还需要再次使用\textit{std::move()}将其移动语义转发给另一个函数。\par
+
+例如，引用重载函数的规则:\par
+
+\begin{codebox}[cpp]
+class X {
+  ...
+};
+
+// forward declarations:
+void foo(const X&); // for constant values (read-only access)
+void foo(X&); // for variable values (out parameters)
+void foo(X&&); // for values that are no longer used (move semantics)
+\end{codebox}
+
+调用这些函数时，有以下规则:\par
+
+\begin{codebox}[cpp]
+X v;
+const X c;
+
+foo(v); // calls foo(X&)
+foo(c); // calls foo(const X&)
+foo(X{}); // calls foo(X&&)
+foo(std::move(v)); // calls foo(X&&)
+foo(std::move(c)); // calls foo(const X&)
+\end{codebox}
+
+假设通过协助函数\textit{callFoo()}间接地调用相同的参数\textit{foo()}。函数还需要三个重载:\par
+
+\begin{codebox}[cpp]
+void callFoo(const X& arg) { // arg binds to all const objects
+  foo(arg); // calls foo(const X&)
+}
+void callFoo(X& arg) { // arg binds to lvalues
+  foo(arg); // calls foo(X&)
+}
+void callFoo(X&& arg) { // arg binds to rvalues
+  foo(std::move(arg)); // needs std::move() to call foo(X&&)
+}
+\end{codebox}
+
+这里，\textit{arg}都用作lvalue(具有名称的对象)。第一个版本将其作为\textit{const}对象转发，但其他两种情况实现了转发非\textit{const}参数的两种不同方式:\par
+
+\begin{itemize}
+  \item 声明为lvalue引用(绑定到没有移动语义的对象)的参数按原样传递。
+  \item 声明为rvalue引用(绑定到具有移动语义的对象)的参数通过\textit{std::move()}传递。
+\end{itemize}
+
+这可以完美地转发移动语义:对于任何通过移动语义传递的参数，保持移动语义。当遇到没有移动语义的参数时，不添加移动语义。\par
+
+看下\textit{callFoo()}如何调用不同的\textit{foo()}:\par
+
+\begin{codebox}[cpp]
+X v;
+const X c;
+callFoo(v); // calls foo(X&)
+callFoo(c); // calls foo(const X&)
+callFoo(X{}); // calls foo(X&&)
+callFoo(std::move(v)); // calls foo(X&&)
+callFoo(std::move(c)); // calls foo(const X&)
+\end{codebox}
+
+请记住，传递给rlvalue引用的rvalue在使用时成为lvalue，需要\textit{std::move()}再次将其作为rvalue传递。但是，有些地方不能使用\textit{std::move()}。对于其他重载，当传递rvalue时，使用\textit{std::move()}将调用\textit{foo()}的重载实现来获取rvalue引用。\par
+
+为了在泛型代码中实现完美转发，需要为每个参数进行重载。为了支持所有组合，对2个泛型参数有9个重载，对3个泛型参数有27个重载。\par
+
+因此，C++11引入了一种方式来完美地转发给定的参数，不需要任何重载，仍然保持类型和具体值。\par
+
+\mySmallsection{完美转发\textit{const} rvalue引用}
+
+虽然\textit{const} rvalue引用没有语义上的含义，但想要用\textit{std::move()}标记的常量对象的类型和值，还需要第四个重载:\par
+
+\begin{codebox}[cpp]
+void callFoo(const X&& arg) { // arg binds to const rvalues
+  foo(std::move(arg)); // needs std::move() to call foo(const X&&)
+}
+\end{codebox}
+
+否则，将调用\textit{foo(\allowbreak{}const X\&)\allowbreak{}}。这通常没问题的，但在某些情况下，可能希望保留传递\textit{const} rvalue引用的信息(例如，出于某种原因，提供了\textit{foo(\allowbreak{}const X\&\&)\allowbreak{}}的重载)。\par
+
+有了完美转发的特性，泛型代码就没必要为了对两个或三个参数，进行16和64次重载了。\par
+
+
+\section{实现完美转发}
+
+为了避免重载具有不同值类型的参数的函数，C++引入了一种机制来实现完美转发。需要三样东西:\par
+
+\begin{enumerate}
+  \item 将调用形参作为纯rvalue引用(使用\&\&声明，但不使用\textit{const}或\textit{volatile})。
+  \item 形参的类型必须是函数模板的形参。
+  \item 将形参转发给另一个函数时，可以使用\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}的辅助函数，该函数在<utility>头文件中声明。
+\end{enumerate}
+
+函数的完美转发参数，如下所示:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void callFoo(T&& arg) {
+  foo(std::forward<T>(arg)); // equivalent to foo(std::move(arg)) for passed rvalues
+}
+\end{codebox}
+
+\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}实际上是一个条件性\textit{std::move()}，这样就得到了与上面\textit{callFoo()}的三个(或四个)重载等价的行为:
+
+\begin{itemize}
+  \item 如果传递rvalue给\textit{arg}，就会产生与调用\textit{foo(\allowbreak{}std::\allowbreak{}move(\allowbreak{}arg)\allowbreak{})\allowbreak{}}相同的效果。
+  \item 如果我们传递一个lvalue给\textit{arg}，就会产生与调用\textit{foo(arg)}相同的效果。
+\end{itemize}
+
+同样，可以完美传递两个参数:\par
+
+\begin{codebox}[cpp]
+template<typename T1, typename T2>
+void callFoo(T1&& arg1, T2&& arg2) {
+  foo(std::forward<T1>(arg1), std::forward<T2>(arg2));
+}
+\end{codebox}
+
+也可以\textit{将std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}应用于可变参的实参，完美地将进行转发:\par
+
+\begin{codebox}[cpp]
+template<typename... Ts>
+void callFoo(Ts&&... args) {
+  foo(std::forward<Ts>(args)...);
+}
+\end{codebox}
+
+注意，不会对所有参数一次性使用forward<>()，而是会分别为每个参数使用。因此，必须将省略号("…")放在\textit{forward()}表达式的末尾，而不是直接放在\textit{args}的后面。\par
+
+然而，这里到底发生了什么，需要详细的解释。\par
+
+\mySmallsection{9.2.1 通用(或转发)引用}
+
+首先，将\textit{arg}声明为rvalue引用形参:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void callFoo(T&& arg); // arg is universal/forwarding reference
+\end{codebox}
+
+这可能会给人一种应该适用rvalue引用的一般规则的感觉。然而，事实并非如此。函数模板形参的rvalue引用(未限定为\textit{const}或\textit{volatile})，不遵循普通rvalue引用的规则。所以，不是一回事\par
+
+\mySmallsection{两个术语:通用引用和转发引用}
+
+这样的引用称为通用引用。但C++标准中还使用了另一个术语:转发引用。这两个术语没有区别，只是一个历史问题，两个术语的含义是相同的。\par
+
+这两个术语都描述了通用引用/转发引用的基本面:\par
+
+\begin{itemize}
+  \item 可以统一绑定到所有类型的对象(\textit{const}和非\textit{const})和值类别。
+  \item 通常用来转发参数，但这并不是唯一的用法(这也是我更喜欢“通用引用”的原因之一)。
+\end{itemize}
+
+\mySmallsection{通用引用绑定到所有值类别}
+
+通用引用的重要特性是，可以绑定到任何值类别的对象和表达式:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void callFoo(T&& arg); // arg is a universal/forwarding reference
+
+X v;
+const X c;
+callFoo(v); // OK
+callFoo(c); // OK
+callFoo(X{}); // OK
+callFoo(std::move(v)); // OK
+callFoo(std::move(c)); // OK
+\end{codebox}
+
+此外，保持所绑定对象的常量和值类别(无论我们有rvalue还是lvalue):\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void callFoo(T&& arg); // arg is a universal/forwarding reference
+
+X v;
+const X c;
+callFoo(v); // OK, arg is X&
+callFoo(c); // OK, arg is const X&
+callFoo(X{}); // OK, arg is X&&
+callFoo(std::move(v)); // OK, arg is X&&
+callFoo(std::move(c)); // OK, arg is const X&&
+\end{codebox}
+
+按照规则，类型T\&\&是\textit{arg}的类型\par
+
+\begin{itemize}
+  \item 如果引用lvalue，则为lvalue引用
+  \item 如果引用rvalue，则为rvalue引用
+\end{itemize}
+
+注意，用\textit{const}(或\textit{volatile})限定的泛型rvalue引用不是通用引用。只能传递rvalue:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void callFoo(const T&& arg); // arg is not a universal/forwarding reference
+
+const X c;
+callFoo(c); // ERROR: c is not an rvalue
+callFoo(std::move(c)); // OK, arg is const X&&
+\end{codebox}
+
+这里，还没有谈到T的类型。稍后将解释什么样的类型可以导出为通用引用的T。\par
+
+稍后，将讨论使用Lambda的相应示例。\par
+
+\mySmallsection{9.2.2 \textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}}
+
+\textit{callFoo()}内部，使用如下所示的通用引用:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void callFoo(T&& arg) {
+  foo(std::forward<T>(arg)); // becomes foo(std::move(arg)) for passed rvalues
+}
+\end{codebox}
+
+和\textit{std::move()}一样，\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}也定义在头文件<utility>中。\par
+
+\textit{std::\allowbreak{}forward<\allowbreak{}t>(\allowbreak{}arg)\allowbreak{}}其实是这样实现的:\par
+
+\begin{itemize}
+  \item 如果传递给函数的是T类型的rvalue，则表达式等价于\textit{std::\allowbreak{}move(\allowbreak{}arg)\allowbreak{}}。
+  \item 如果传递给函数的是T类型的lvalue，则表达式等价于arg。
+\end{itemize}
+
+也就是说，\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}是\textit{std::move()}，仅用于传递rvalue。\par
+
+就像\textit{std::move()}一样，\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}的语义是在这里不再需要这个值，另外保留了要传递的通用引用绑定的对象类型(包括常量)和值类别。你可以争辩说，需要达成条件才不再需要这个值，但是因为不知道\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}是否变成了\textit{std::move()}，所以假设对象之后有值就是错误的。因此，使用\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}之后，对象通常有效，但可能不知道具体值。\par
+
+\mySmallsection{\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}用于成员函数}
+
+注意，可以在调用成员函数时使用\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}作为通用引用。记住，成员函数可能使用引用限定符对移动语义有特定的重载。如果不再需要该对象的值，可以使用\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}来调用成员函数。\par
+
+例如，假设重载了getter来提高返回临时人员名称的性能:\par
+
+\begin{codebox}[cpp]
+class Person
+{
+private:
+  std::string name;
+public:
+  ...
+  void print() const {
+    std::cout << "print()\n";
+  }
+
+  std::string getName() && { // when we no longer need the value
+    return std::move(name); // we steal and return by value
+  }
+  const std::string& getName() const& { // in all other cases
+    return name; // we give access to the member
+  }
+};
+\end{codebox}
+
+采用通用引用的函数中，可以使用\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}，如下所示:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void foo(T&& x)
+{
+  x.print(); // OK, no need to forward the passed value category
+
+  x.getName(); // calls getName() const&
+  std::forward<T>(x).getName(); // calls getName() && for rvalues (OK, no longer need x)
+}
+\end{codebox}
+
+使用\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}之后，\textit{x}处于有效但未指定的状态。无论何时使用\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}，请确保不再使用该对象。\par
+
+\mySmallsection{9.2.3 完美转发的效果}
+
+结合声明通用引用的行为和\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}的使用，得到了以下行为:\par
+
+\begin{codebox}[cpp]
+void foo(const X&); // for constant values (read-only access)
+void foo(X&); // for variable values (out parameters)
+void foo(X&&); // for values that are no longer used (move semantics)
+template<typename T>
+
+void callFoo(T&& arg) { // arg is a universal/forwarding reference
+  foo(std::forward<T>(arg)); // becomes foo(std::move(arg)) for passed rvalues
+}
+
+X v;
+const X c;
+
+callFoo(v); // OK, expands to foo(arg), so it calls foo(X&)
+callFoo(c); // OK, expands to foo(arg), so it calls foo(const X&)
+callFoo(X{}); // OK, expands to foo(std::move(arg)), so it calls foo(X&&)
+callFoo(std::move(v)); // OK, expands to foo(std::move(arg)), so it calls foo(X&&)
+callFoo(std::move(c)); // OK, expands to foo(std::move(arg)), so it calls foo(const X&)
+\end{codebox}
+
+传递给callFoo()的任何参数都会变成lvalue(因为参数\textit{arg}是有名称的对象)。然而，\textit{arg}的类型取决于传递的内容:\par
+
+\begin{itemize}
+  \item 如果传递lvalue，\textit{arg}就是一个lvalue引用(传递非\textit{const} X时是X\&，传递\textit{const} X时是X\&)。
+  \item 如果传递rvalue(未命名的临时对象或用\textit{std::move()}标记的对象)，则\textit{arg}是rvalue引用(X\&\&或const X\&\&)。
+\end{itemize}
+
+当有rvalue引用时(即，\textit{arg}绑定到右值)，通过\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}，就可以用\textit{std::move()}转发形参。\par
+
+
+\section{右值引用与通用引用}
+
+不幸的是，通用/转发引用使用与普通rvalue引用相同的语法(形式上，是特殊的rvalue引用)。这是混乱的根源，如果看到有两个\&符号的声明，必须再次检查使用的是真实类型名，还是函数模板形参名。\par
+
+换句话说，两者之间有很大的区别\par
+
+\begin{codebox}[cpp]
+void foo(Coll&& arg) // arg is an ordinary rvalue reference of type Coll
+\end{codebox}
+
+和\par
+
+\begin{codebox}[cpp]
+template<typename Coll>
+void foo(Coll&& arg) // arg is a universal/forwarding reference of any type
+\end{codebox}
+
+详细讨论一下两者的区别。\par
+
+\mySmallsection{9.3.1 实际类型的rvalue引用}
+
+普通的rvalue引用就不是使用函数的模板形参名(或者该引用是用\textit{const}或\textit{volatile}声明的)，所以只能将这些引用绑定到rvalue。此外，传递的实参还不是\textit{const}:\par
+
+\begin{codebox}[cpp]
+using Coll = std::vector<std::string>;
+
+void foo(Coll&& arg) // arg is an ordinary rvalue reference
+{
+  Coll coll; // coll can’t be const
+  ...
+  bar(std::move(arg)); // perfectly forward to bar() (no need to use std::forward<>() here)
+}
+
+Coll v;
+const Coll c;
+
+foo(v); // ERROR: can’t bind rvalue reference to lvalue
+foo(c); // ERROR: can’t bind rvalue reference to lvalue
+foo(Coll{}); // OK, arg binds to a non-const prvalue
+foo(std::move(v)); // OK, arg binds to a non-const xvalue
+foo(std::move(c)); // ERROR: can’t bind non-const rvalue reference to const xvalue
+\end{codebox}
+
+\textit{foo()}中:\par
+
+\begin{itemize}
+  \item \textit{arg}的类型\textit{Coll}绝不是\textit{const}。
+  \item 使用\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}没有意义。只有不再需要该值，并想将其转发给另一个函数时，使用\textit{std::move()}才有意义(这里可以使用\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}，因为当使用rvalue引用时，它等同于\textit{std::move()})。
+\end{itemize}
+
+\mySmallsection{9.3.2 函数模板形参的rvalue引用}
+
+如果函数模板形参有非\textit{const}/\textit{volatile}的rvalue引用，则可以传递所有值类别的对象。传递的实参可以是\textit{const}，也可以不是:\par
+
+\begin{codebox}[cpp]
+template<typename Coll>
+void foo(Coll&& arg) // arg is a universal/forwarding reference
+{
+  Coll coll; // coll may be const
+  ...
+  bar(std::forward<Coll>(arg)); // perfectly forward to bar() (don’t use std::move() here)
+}
+
+std::vector<std::string> v;
+const std::vector<std::string> c;
+
+foo(v); // OK, arg binds to a non-const lvalue
+foo(c); // OK, arg binds to a const lvalue
+foo(Coll{}); // OK, arg binds to a non-const prvalue
+foo(std::move(v)); // OK, arg binds to a non-const xvalue
+foo(std::move(c)); // OK, arg binds to a const xvalue
+\end{codebox}
+
+\textit{foo()}中:\par
+
+\begin{itemize}
+  \item \textit{arg}的类型现在可以是\textit{const}，也可以不是。
+  \item 这种情况下，使用\textit{std::move()}没有意义。只有不再需要该值，并想要将其转发给另一个函数时，才有必要使用\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}(也可以使用\textit{std::move()}，但会将所有参数传递给带有移动语义的\textit{foo()}，将非\textit{const} lvalue \textit{v}作为xvalue传递)。
+\end{itemize}
+
+
+\section{使用通用引用的重载}
+
+已经讨论了将对象绑定到普通引用时的规则。现在，在引入通用引用之后，必须扩展这些规则。\par
+
+再次假设有一个类X，有一个非\textit{const}变量\textit{v}，有一个\textit{const}变量\textit{c}:\par
+
+\begin{codebox}[cpp]
+class X {
+  ...
+};
+
+X v;
+const X c{ ... };
+\end{codebox}
+
+如果提供函数\textit{f()}的所有重载，根据正式规则，就是下面列出所有重载:\par
+
+\begin{codebox}[cpp]
+void f(const X&); // read-only access
+void f(X&); // OUT parameter (usually long-living object)
+void f(X&&); // can steal value (object usually about to die)
+void f(const X&&); // contradicting semantic meaning
+template<typename T>
+void f(T&&); // to use perfect forwarding
+\end{codebox}
+
+\mySmallsection{表 9.1. 绑定所有引用规则}
+\myGraphic{1.0}{images/chapter9/1}{}
+
+同样，这些数字列出了重载解析的优先级(最小的数字具有最高的优先级)，以便确定重载时调用了哪个函数。\par
+
+请注意，通用引用总是次优选择。完美匹配总是优先，但是需要转换类型(例如使其为\textit{const}或将rvalue转换为lvalue)是比为精确类型实例化函数模板更糟糕的匹配方式。\par
+
+\mySmallsection{9.4.1 用通用引用修正重载解析}
+
+重载解析中，通用引用绑定比类型转换更好，这有一个非常糟糕的副作用:如果有一个接受单个通用引用的构造函数，那么这个匹配就要比以下方式更优\par
+
+\begin{itemize}
+  \item 如果传递非\textit{const}对象，则使用复制构造函数
+  \item 如果传递\textit{const}对象，则使用移动构造函数
+\end{itemize}
+
+因此，实现只有一个通用引用参数的构造函数时，必须谨慎。\par
+
+思考下面的代码:\par
+
+\begin{codeboxt}[cpp]{generic/universalconstructor.cpp}
+#include <iostream>
+
+class X {
+public:
+  X() = default;
+  X(const X&) {
+    std::cout << "copy constructor\n";
+  }
+  X(X&&) {
+    std::cout << "move constructor\n";
+  }
+
+  template<typename T>
+  X(T&&) {
+    std::cout << "universal constructor\n";
+  }
+};
+int main()
+{
+  X xv;
+  const X xc;
+
+  X xcc{xc}; // OK: calls copy constructor
+  X xvc{xv}; // OOPS: calls universal constructor
+  X xvm{std::move(xv)}; // OK: calls move constructor
+  X xcm{std::move(xc)}; // OOPS: calls universal constructor
+}
+\end{codeboxt}
+
+如注释中所示，该程序有以下输出:\par
+
+\begin{myOutput}
+copy constructor \\
+universal constructor \\
+move constructor \\
+universal constructor
+\end{myOutput}
+
+因此，最好避免实现将第一个形参声明为通用引用，并为任意类型的实参调用的泛型构造函数。\par
+
+另一种选择是，传递的是类的类型(或可转换为)，则以禁用构造函数的方式约束构造函数。其必须使用在复制或移动构造函数上才有效果。从C++20起，可以写成这样:\par
+
+\begin{codebox}[cpp]
+class X {
+  public:
+  ...
+  template<typename T>
+  requires (!std::is_same_v<std::remove_cvref_t<T>, X>)
+  X(T&&) {
+    std::cout << "universal constructor\n";
+  }
+};
+\end{codebox}
+
+C++20前，需要这样写:\par
+
+\begin{codebox}[cpp]
+class X {
+  public:
+  ...
+  template<typename T,
+  typename
+  = typename std::enable_if<!std::is_same<typename std::decay<T>::type,
+  X>::value
+  >::type>
+  X(T&&) {
+    std::cout << "universal constructor\n";
+  }
+};
+\end{codebox}
+
+
+\section{Lambda中的完美转发}
+
+如果想要完美地转发Lambda的参数，必须使用通用引用和\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}。但是，通常用auto\&\&声明通用引用。\par
+
+C++20中，也可以在Lambda中使用模板形参:\par
+
+\begin{codebox}[cpp]
+auto callFoo = []<typename T>(T&& arg) { // OK, universal reference since C++20
+  foo(std::forward<T>(arg)); // perfectly forward arg
+};
+\end{codebox}
+
+
+\section{总结}
+
+\begin{itemize}
+  \item 带有两个\&符(\&\&)的声明可以是两个不同的类型:
+  \begin{itemize}
+    \item[-] 如果不是函数模板形参，它是一个普通的ravlue引用，只绑定到ravlue。
+    \item[-] 如果是函数模板参数，它是一个通用引用，可以绑定到所有值类别。
+  \end{itemize}
+  \item 通用引用(在C++标准中称为转发引用)是一种可以通用地引用任何类型和值类别对象的引用。类型是：
+    \begin{itemize}
+    \item[-] lvalue引用(类型\&)：绑定到lvalue
+    \item[-] rvalue引用(类型\&\&)：绑定到rvalue
+  \end{itemize}
+  \item 要完美地传递传递的实参，请使用\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}，并将该形参声明为函数模板形参的通用引用。
+  \item \textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}是一个条件\textit{std::move()}。如果参数是rvalue，则扩展为\textit{std::move()}。
+  \item 使用\textit{std::\allowbreak{}forward<\allowbreak{}>(\allowbreak{})\allowbreak{}}标记对象可能是有意义的，即使在调用成员函数时也是如此。
+  \item 通用引用是所有重载解析的次优选择。
+  \item 不要为通用引用实现泛型构造函数(或为特定类型进行约束)。
+\end{itemize}

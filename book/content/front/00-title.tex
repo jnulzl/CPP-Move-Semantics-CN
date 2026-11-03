@@ -1,0 +1,64 @@
+% =============================================================================
+%  中文内封（Title page）—— 仿模板的满版色带设计，改为本书的标题/作者信息
+%  · 用 remember picture / overlay 满版绘制，不受版心影响
+%  · 纸张 531.36bp × 628.83bp，下列 y 偏移均按该高度排布
+% =============================================================================
+\thispagestyle{empty}
+
+\begin{tikzpicture}[remember picture, overlay]
+  % 先按纸边裁切，避免关键字纹理伸出页面（在 PDF 里会显示到裁切线之外）
+  \clip (current page.south west) rectangle (current page.north east);
+  \definecolor{covTop}{HTML}{1F3A5F}
+  \definecolor{covDark}{HTML}{16284A}
+  \definecolor{covBright}{HTML}{2E5E8C}
+  \definecolor{covAccent}{HTML}{4A90C2}
+
+  % ---------- 色带 ----------
+  \fill[covTop]
+    (current page.north west) rectangle ([yshift=-32.6bp]current page.north east);
+  \fill[covDark]
+    ([yshift=-32.6bp]current page.north west) rectangle ([yshift=-223.4bp]current page.north east);
+  \fill[covBright]
+    ([yshift=-223.4bp]current page.north west) rectangle ([yshift=-409.3bp]current page.north east);
+  \fill[covDark]
+    ([yshift=-409.3bp]current page.north west) rectangle ([yshift=-599.1bp]current page.north east);
+  \fill[covTop]
+    ([yshift=-599.1bp]current page.north west) rectangle (current page.south east);
+
+  % ---------- 暗带上的关键字淡纹理 ----------
+  \foreach \yy in {48,60,72,84,96,108,120,132,144,156,168,180,192,204,216,
+                   425,437,449,461,473,485,497,509,521,533,545,557,569,581,593}{
+    \node[anchor=west, text=white, opacity=0.06,
+          font=\ttfamily\fontsize{8bp}{8bp}\selectfont]
+      at ([xshift=-6bp, yshift=-\yy bp]current page.north west)
+      {std::move std::forward noexcept decltype(auto) lvalue rvalue xvalue prvalue
+       move constructor move assignment perfect forwarding value category
+       std::move std::forward noexcept decltype(auto) lvalue rvalue xvalue prvalue
+       move constructor move assignment perfect forwarding value category};
+  }
+
+  % ---------- 顶部作者标识 ----------
+  \node[anchor=center, text=white, font=\sffamily\bfseries\fontsize{10bp}{12bp}\selectfont]
+    at ([yshift=-16.3bp]current page.north) {NICOLAI M. JOSUTTIS};
+
+  % ---------- 主标题（亮蓝色带） ----------
+  \node[anchor=center, text=white, font=\sffamily\bfseries\fontsize{40bp}{46bp}\selectfont]
+    at ([yshift=-300bp]current page.north) {C++ 移动语义};
+  \node[anchor=center, text=covAccent, font=\sffamily\bfseries\fontsize{17bp}{21bp}\selectfont]
+    at ([yshift=-348bp]current page.north) {C++ Move Semantics};
+
+  % ---------- 副标题与作者（下部暗带） ----------
+  \node[anchor=center, text=white, font=\sffamily\fontsize{13.5bp}{17bp}\selectfont]
+    at ([yshift=-470bp]current page.north) {从右值引用、特殊成员函数到完美转发与 noexcept};
+  \node[anchor=center, text=white, font=\sffamily\fontsize{11bp}{14bp}\selectfont]
+    at ([yshift=-502bp]current page.north) {The Complete Guide};
+  \node[anchor=center, text=white, font=\sffamily\fontsize{12.5bp}{16bp}\selectfont]
+    at ([yshift=-556bp]current page.north) {Nicolai M. Josuttis\quad 著};
+  \node[anchor=center, text=white, font=\sffamily\fontsize{10bp}{13bp}\selectfont]
+    at ([yshift=-582bp]current page.north) {陈晓伟\quad 译};
+  \node[anchor=center, text=covAccent, font=\sffamily\fontsize{9.5bp}{12bp}\selectfont]
+    at ([yshift=-612bp]current page.north) {中文翻译版};
+\end{tikzpicture}
+
+\null
+\clearpage

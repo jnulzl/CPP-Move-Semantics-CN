@@ -1,0 +1,373 @@
+% 第 2 章 移动语义的核心（由 tools/convert.py 从原 content/ 自动生成，勿手改）
+
+了解了第一个使用移动语义的例子之后，本章会对移动语义的基本特征进行讨论。\par
+
+
+\section{右值引用}
+
+为了支持移动语义，C++引入了一种新的引用类型:\textit{右值引用}。我们讨论一下这是什么，以及如何使用。\par
+
+\mySmallsection{2.1.1 细节部分}
+
+右值引用使用两个\&号声明。与普通引用一样，右值引用了一个存在的对象，该对象作为初始值传递。但根据语义，右值引用只能引用没有名称的临时对象，或使用\textit{std::move()}的对象:\par
+
+\begin{codebox}[cpp]
+std::string returnStringByValue(); // forward declaration
+...
+std::string s{"hello"};
+...
+std::string&& r1{s}; // ERROR
+std::string&& r2{std::move(s)}; // OK
+std::string&& r3{returnStringByValue()}; // OK, extends lifetime of return value
+\end{codebox}
+
+右值引用来自这样一个事实:对象通常只能引用右值，这是类别，用于没有名称的临时对象和使用\textit{std::move()}的对象。\par
+
+与成功初始化返回值引用一样，引用将返回值的生命周期延长到引用的生命周期结束(普通的\textit{const}左值引用已经具有此行为)。\par
+
+用于初始化引用的语法无关紧要。使用等号、大括号或圆括号都可以:\par
+
+\begin{codebox}[cpp]
+std::string s{"hello"};
+...
+std::string&& r1 = std::move(s); // OK, rvalue reference to s
+std::string&& r2{std::move(s)}; // OK, rvalue reference to s
+std::string&& r3(std::move(s)); // OK, rvalue reference to s
+\end{codebox}
+
+所有这些引用都具有这样的语义:“只要对象的状态有效，就可以窃取/修改引用的对象。”编译器不会检查这些语义，因此可以对该类型的任何非\textit{const}对象那样修改右值引用，也可能不做修改。如果对一个对象有一个右值引用，该对象可能会收到一个不同的值(可能是也可能不是一个默认构造对象的值)，或者保留原始值。\par
+
+移动语义允许我们使用不再需要的值进行优化。如果编译器自动检测到从生命周期结束的对象中获取值，将自动切换到移动语义:\par
+
+\begin{itemize}
+  \item 传递一个临时对象的值，该对象将在语句执行后自动撤销。
+  \item 传递一个使用\textit{std::move()}的非\textit{const}对象。
+\end{itemize}
+
+\mySmallsection{2.1.2 作为参数的右值引用}
+
+将形参声明为右值引用时，具有的行为和语义:\par
+
+\begin{itemize}
+  \item 形参只能绑定到一个没有名称的临时对象，或者绑定到一个使用\textit{std::move()}的对象。
+  \item 根据右值引用的语义:
+  \begin{itemize}
+    \item[-] 调用者不再对值感兴趣。因此，可以修改参数所引用的对象。
+    \item[-] 但是，调用者可能仍然对使用对象感兴趣。因此，任何修改都应该使引用的对象保持有效状态。
+  \end{itemize}
+\end{itemize}
+
+例如:\par
+
+\begin{codebox}[cpp]
+void foo(std::string&& rv); // takes only objects where we no longer need the value
+...
+std::string s{"hello"};
+...
+foo(s); // ERROR
+foo(std::move(s)); // OK, value of s might change
+foo(returnStringByValue()); // OK
+\end{codebox}
+
+可以在通过\textit{std::move()}传递命名对象后使用，但通常不这样做。推荐的编程方式是不在\textit{std::move()}后面使用对象:\par
+
+\begin{codebox}[cpp]
+void foo(std::string&& rv); // takes only objects where we no longer need the value
+...
+std::string s{"hello"};
+...
+foo(std::move(s)); // OK, value of s might change
+std::cout << s << '\n'; // OOPS, you don’t know which value is printed
+foo(std::move(s)); // OOPS, you don’t know which value is passed
+s = "hello again"; // OK, but rarely done
+foo(std::move(s)); // OK, value of s might change
+\end{codebox}
+
+对于标记为“OOPS”的两行，只要不对\textit{s}的当前值有期望，技术上是可以调用的。因此，打印是可以的。\par
+
+
+\section{std::move()}
+
+如果有一个对象，当使用的时候，生存期没有结束，可以用\textit{std::move()}标记它，表示“在这里不再需要这个值。”\textit{std::move()}不进行移动，只在使用表达式的上下文中设置了一个临时标记:\par
+
+\begin{codebox}[cpp]
+void foo1(const std::string& lr); // binds to the passed object without modifying it
+void foo1(std::string&& rv); // binds to the passed object and might steal/modify the value
+...
+std::string s{"hello"};
+...
+foo1(s); // calls the first foo1(), s keeps its value
+foo1(std::move(s)); // calls the second foo1(), s might lose its value
+\end{codebox}
+
+带有\textit{std::move()}标记的对象仍然可以传递给接受普通\textit{const}左值引用的函数:\par
+
+\begin{codebox}[cpp]
+void foo2(const std::string& lr); // binds to the passed object without modifying it
+... // no other overload of foo2()
+std::string s{"hello"};
+...
+foo2(s); // calls foo2(), s keeps its value
+foo2(std::move(s)); // also calls foo2(), s keeps its value
+\end{codebox}
+
+注意，用\textit{std::move()}标记的对象不能传递给非\textit{const}左值引用:\par
+
+\begin{codebox}[cpp]
+void foo3(std::string&); // modifies the passed argument
+...
+std::string s{"hello"};
+...
+foo3(s); // OK, calls foo3()
+foo3(std::move(s)); // ERROR: no matching foo3() declared
+\end{codebox}
+
+注意，用\textit{std::move()}标记马上会销毁的对象是没有意义的。事实上，这甚至会对优化产生反效果。
+
+\mySmallsection{2.2.1 std::move()的头文件}
+
+\textit{std::move()}定义为C++标准库中的一个函数。因此，使用时需要包含头文件<utility>:\par
+
+\begin{codebox}[cpp]
+#include <utility> // for std::move()
+\end{codebox}
+
+使用\textit{std::move()}的程序在编译时通常不包含这个头文件，因为几乎所有的头文件都包含了<utility>。但是，非标准头文件需要包含该头文件。因此，当使用\textit{std::move()}时，应该显式包含<utility>以使程序可移植。\par
+
+\mySmallsection{2.2.2 实现std::move()}
+
+\textit{std::move()}只不过是对右值引用的\textit{static\_\allowbreak{}cast}。可以手动调用\textit{static\_\allowbreak{}cast}来达到相同的效果，如下所示:\par
+
+\begin{codebox}[cpp]
+foo(static_cast<decltype(obj)&&>(obj)); // same effect as foo(std::move(obj))
+\end{codebox}
+
+因此，我们也可以这样写:\par
+
+\begin{codebox}[cpp]
+std::string s;
+...
+foo(static_cast<std::string&&>(s)); // same effect as foo(std::move(s))
+\end{codebox}
+
+注意，\textit{static\_\allowbreak{}cast}所做的不仅仅是改变对象的类型。还允许将对象传递给右值引用(记住，通常不允许将具有名称的对象传递给右值引用)。我们将在关于价值类别的章节中详细讨论。\par
+
+
+\section{移动的对象}
+
+在\textit{std::move()}之后，移动的对象不会(部分)销毁。它们仍然是有效的对象，至少会为其调用析构函数。然而，它们也是有效的，因为它们具有一致的状态，所有操作都按照预期工作，但不知道的是它们的值。这就像使用类型的参数，而不知道传递了哪个值。\par
+
+\mySmallsection{2.3.1 有效但定义的状态}
+
+C++标准库保证移动的对象处于有效但未定义的状态。\par
+
+考虑如下代码:\par
+
+\begin{codebox}[cpp]
+std::string s;
+...
+coll.push_back(std::move(s));
+\end{codebox}
+
+用\textit{std::move()}传递\textit{s}之后，可以获取字符数量，打印相应的值，甚至赋一个新值。如果不先检查字符数量，就不能打印第一个字符或任何其他字符:\par
+
+\begin{codebox}[cpp]
+foo(std::move(s)); // keeps s in a valid but unclear state
+
+std::cout << s << '\n'; // OK (don’t know which value is written)
+std::cout << s.size() << '\n'; // OK (writes current number of characters)
+std::cout << s[0] << '\n'; // ERROR (potentially undefined behavior)
+std::cout << s.front() << '\n'; // ERROR (potentially undefined behavior)
+s = "new value"; // OK
+\end{codebox}
+
+尽管不知道具体的值，但该字符串处于一致状态。例如，\textit{s.size()}将返回字符数，可以遍历所有有效的索引:\par
+
+\begin{codebox}[cpp]
+foo(std::move(s)); // keeps s in a valid but unclear state
+
+for (int i = 0; i < s.size(); ++i) {
+  std::cout << s[i]; // OK
+}
+\end{codebox}
+
+对于用户定义类型，还应该确保移动的对象处于有效状态，有时需要声明或实现移动操作。“移动后的状态”这一章将对此进行详细讨论。\par
+
+\mySmallsection{2.3.2 重用移动的对象}
+
+您可能想知道为什么已移动的对象仍然是有效的对象，并且没有(部分)销毁。原因是使用了移动语义，在这些应用中再次使用已移动的对象是有意义的。\par
+
+例如，考虑从流中逐行读取字符串并将其移动到vector对象中的代码:\par
+
+\begin{codebox}[cpp]
+std::vector<std::string> allRows;
+std::string row;
+while (std::getline(myStream, row)) { // read next line into row
+  allRows.push_back(std::move(row)); // and move it to somewhere
+}
+\end{codebox}
+
+每次将一行读入行后，使用\textit{std::move()}将\textit{row}的值移动到所有行的向量中。然后，s\textit{td::\allowbreak{}getline(\allowbreak{})\allowbreak{}}再次使用已移动的对象行来读入下一行。\par
+
+第二个例子，考虑一个交换两个值的泛型函数:\par
+
+\begin{codebox}[cpp]
+template<typename T>
+void swap(T& a, T& b)
+{
+  T tmp{std::move(a)};
+  a = std::move(b); // assign new value to moved-from a
+  b = std::move(tmp); // assign new value to moved-from b
+}
+\end{codebox}
+
+我们将\textit{a}的值移动到一个临时对象中，以便之后能够移动并赋\textit{b}的值。然后，被移动的对象\textit{b}接收到\textit{tmp}的值，这是\textit{a}之前的值。\par
+
+例如，在排序算法中移动不同元素的值，使它们处于有序状态。给已移动的对象赋新值总是发生在那里。该算法甚至可以对这种移动对象的方式使用排序。\par
+
+通常，已移动的对象是可以销毁的有效对象(析构函数不应该失败)，重用以获得其他值，并支持类型的所有操作对象，而不需要知道具体值。“已移动的状态”这一章将对此进行详细讨论。\par
+
+\mySmallsection{2.3.3 将对象赋值给自己}
+
+已移动的对象处于有效但未定义状态的规则，通常也适用于直接或间接自移动的对象。\par
+
+例如，下面的语句之后，对象\textit{x}通常在不知道其值的情况下是有效的:\par
+
+\begin{codebox}[cpp]
+x = std::move(x); // afterwards x is valid but has an unclear value
+\end{codebox}
+
+同样，C++标准库保证对用户定义类型的实例对象通常也提供这种保证，但有时必须来修复默认生成的移动状态。\par
+
+
+\section{通过引用进行重载}
+
+引入右值引用之后，有三种主要的引用调用方式:\par
+
+\begin{itemize}
+  \item \textit{\textbf{void foo(\allowbreak{}const std::\allowbreak{}string\& arg)\allowbreak{}}}\par
+  将实参作为\textit{const}左值引用。\par
+  只有对传递的参数的读访问权。如果类型适合，可以把所有东西都传递给用这种方式声明的函数:\par
+  \begin{itemize}
+    \item[-] 可修改的命名对象
+    \item[-] \textit{const}命名对象
+    \item[-] 没有名称的临时对象
+    \item[-] 用\textit{std::move()}标记的对象
+  \end{itemize}
+  语义上的意思是给\textit{foo()}传递的实参读访问权。这个参数就是我们所说的\textit{in}参数。
+  \item \textit{\textbf{void foo(\allowbreak{}std::\allowbreak{}string\& arg)\allowbreak{}}}\par
+  将实参作为非\textit{const}左值引用。\par
+  对传递的参数具有写访问权限。即使类型适合，也不能再将所有内容传递给以这种方式声明的函数:\par
+  \begin{itemize}
+    \item[-] 可修改的命名对象
+  \end{itemize}
+  对于所有其他参数，则不进行编译。\par
+  语义上的意思是，让\textit{foo()}对传递的参数具有读/写访问权限。参数就是输出或输入/输出参数。\par
+  \item \textit{\textbf{void foo(\allowbreak{}std::\allowbreak{}string\&\& arg)\allowbreak{}}}\par
+  将实参作为非\textit{const}右值引用。\par
+  对传递的参数具有写访问权限。但是，仍然对可以传递的内容有限制:\par
+  \begin{itemize}
+    \item[-] 没有名称的临时对象
+    \item[-] 用\textit{std::move()}标记的对象
+  \end{itemize}
+  语义上的意思是给\textit{foo()}对传递的参数的写访问权来窃取值。它是一个\textit{in}参数，附加的约束是调用者不再需要这个值。
+\end{itemize}
+
+右值引用绑定到非\textit{const}左值引用之外的其他实参。因此，必须引入新的语法，不能仅仅将移动语义作为修改传递参数的函数的一种不同方式来实现。\par
+
+\mySmallsection{2.4.1 \textit{const}右值引用}
+
+从技术上讲，还有第四种调用引用的方式:\par
+
+\begin{itemize}
+  \item \textit{\textbf{void foo(\allowbreak{}const std::\allowbreak{}string\&\& arg)\allowbreak{}}}\par
+  将实参作为\textit{const}右值引用。\par
+  对传递的参数具有读访问权，这里的限制有:
+  \begin{itemize}
+    \item[-] 没有名称的临时对象
+    \item[-] 用\textit{std::move()}标记的\textit{const}或非\textit{const}对象
+  \end{itemize}
+\end{itemize}
+
+然而，这种情况没有意义。作为右值引用，允许窃取值，但作为\textit{const}，则禁止对传递的实参进行任何修改，这本身就是矛盾的。\par
+
+尽管如此，创建具有这种行为的对象是非常容易的:只需用\textit{std::move()}标记一个\textit{const}对象:\par
+
+\begin{codebox}[cpp]
+const std::string s{"data"};
+...
+foo(std::move(s)); // would call a function declared as const rvalue reference
+\end{codebox}
+
+当声明函数返回带有\textit{const}的值时，这种情况可能会间接发生:\par
+
+\begin{codebox}[cpp]
+const std::string getValue();
+...
+foo(getValue()); // would call a function declared as const rvalue reference
+\end{codebox}
+
+这种情况通常由用于\textit{const}左值引用重载。可能会进行特定实现，但通常没有意义(C++标准库类\textit{std::\allowbreak{}optional<\allowbreak{}>}使用\textit{const}右值引用)。\par
+
+
+\section{按值传递}
+
+当声明一个函数以值作为参数，会(自动)使用移动语义。\par
+
+例如:\par
+
+\begin{codebox}[cpp]
+void foo(std::string str); // takes the object by value
+...
+std::string s{"hello"};
+...
+foo(s); // calls foo(), str becomes a copy of s
+foo(std::move(s)); // calls foo(), s is moved to str
+foo(returnStringByValue()); // calls foo(), return value is moved to str
+\end{codebox}
+
+如果调用者发出信号表示不再需要传递的实参的值(通过\textit{std::move()}或传递一个没有名称的临时对象)，形参\textit{str}将用从传递的实参中窃取值进行初始化。\par
+
+这意味着，如果使用移动语义传递了一个临时对象或传递的参数标记为\textit{std::move()}，那么按值调用会突然变得便利起来。就像按值返回本地对象一样，这个移动也可以优化掉。如果没有优化掉，那么这个调用现在肯定是高效的(如果有更高效的移动语义的话)。\par
+
+注意以下差异:\par
+
+\begin{codebox}[cpp]
+void fooByVal(std::string str); // takes the object by value
+void fooByRRef(std::string&& str); // takes the object by rvalue reference
+...
+std::string s1{"hello"}, s2{"hello"};
+...
+fooByVal(std::move(s1)); // s1 is moved
+fooByRRef(std::move(s2)); // s2 might be moved
+\end{codebox}
+
+这里，我们比较两个函数:一个以值作为字符串，另一个以字符串作为右值引用。在这两种情况下，都传递了带有\textit{std::move()}的字符串。\par
+
+\begin{itemize}
+  \item 按值获取字符串的函数将使用移动语义，因为新字符串是用传递的参数的值创建的。
+  \item 通过右值引用获取字符串的函数可以使用移动语义，传递参数不会创建新字符串。是否窃取/修改传递的参数值取决于函数的实现。
+\end{itemize}
+
+因此:\par
+
+\begin{itemize}
+  \item 声明为支持移动语义的函数可能不使用移动语义。
+  \item 通过值声明接受参数的函数将使用移动语义。
+\end{itemize}
+
+移动语义的效果并不能保证优化发生和优化效果。我们知道的是，传递的对象随后处于有效但未定义的状态。\par
+
+
+\section{总结}
+
+\begin{itemize}
+  \item 右值引用使用\&\&声明，没有\textit{const}。
+  \item 可以由没有名称的临时对象或用\textit{std::move()}标记的非\textit{const}对象初始化。
+  \item 右值引用延长了由返回值的对象的生命周期。
+  \item \textit{std::move()}对应的是右值引用类型的\textit{static\_\allowbreak{}cast}。这允许我们将命名对象传递给右值引用。
+  \item \textit{std::move()}标记的对象也可以通过\textit{const}左值引用，传递给接受实参但不接受非\textit{const}左值引用的函数。
+  \item 标记为\textit{std::move()}的对象也可以传递给按值接受参数的函数。在这种情况下，移动语义用于初始化参数，这可以使按值调用非常高效。
+  \item \textit{const}右值引用是可能的，但针对它们的实现通常没有意义。
+  \item 已移动的对象处于有效但未定义的状态，C++标准库为其类型保证了这一点。您仍然可以(重新)使用它们，只要您不对它们的价值做任何期望。
+\end{itemize}

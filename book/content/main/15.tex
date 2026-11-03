@@ -1,0 +1,1068 @@
+% 第 15 章 C++标准库类型中的移动语义（由 tools/convert.py 从原 content/ 自动生成，勿手改）
+
+本章讨论了C++标准库中移动语义最重要的应用。\par
+
+可以帮助您更好地理解基本类型，如字符串和容器，并了解一些移动语义的巧妙使用。\par
+
+
+\section{字符串的移动语义}
+
+字符串是可以分配内存来保存其值的对象。因此，可以对其使用移动语义。\par
+
+书中已经有了几个关于字符串如何支持移动语义的例子:\par
+
+\begin{itemize}
+  \item 将字符串移动到某个vector中
+  \item 为字符串实现移动构造函数
+  \item 成员初始化字符串
+  \item 循环中读取字符串，并在\textit{move()}之后使用它们
+\end{itemize}
+
+本节中，将更详细地介绍移动语义对字符串的影响。\par
+
+\mySmallsection{15.1.1 字符串分配和容量}
+
+字符串的容量(当前可用于该值的内存)通常不会减少。只有移动操作、swap()或shrink \_to\_fit()可以减小容量。\par
+
+考虑下面例子:\par
+
+\begin{codeboxt}[cpp]{lib/stringmoveassign.cpp}
+#include <iostream>
+#include <string>
+
+int main()
+{
+  std::string s0;
+  std::string s1{"short"};
+  std::string s2{"a string with an extraordinarily long value"};
+  std::cout << "- s0 capa: " << s0.capacity() << " ('" << s0 << "')\n";
+  std::cout << " s1 capa: " << s1.capacity() << " ('" << s1 << "')\n";
+  std::cout << " s2 capa: " << s2.capacity() << " ('" << s2 << "')\n";
+
+  std::string s3{std::move(s1)};
+  std::string s4{std::move(s2)};
+  std::cout << "- s1 capa: " << s1.capacity() << " ('" << s1 << "')\n";
+  std::cout << " s2 capa: " << s2.capacity() << " ('" << s2 << "')\n";
+  std::cout << " s3 capa: " << s3.capacity() << " ('" << s3 << "')\n";
+  std::cout << " s4 capa: " << s4.capacity() << " ('" << s4 << "')\n";
+
+  std::string s5{"quite a reasonable value"};
+  std::cout << "- s4 capa: " << s4.capacity() << " ('" << s4 << "')\n";
+  std::cout << " s5 capa: " << s5.capacity() << " ('" << s5 << "')\n";
+
+  s4 = std::move(s5);
+  std::cout << "- s4 capa: " << s4.capacity() << " ('" << s4 << "')\n";
+  std::cout << " s5 capa: " << s5.capacity() << " ('" << s5 << "')\n";
+}
+\end{codeboxt}
+
+代码中，由于小字符串优化(SSO)，即使是空字符串也有容纳某些字符的能力，这通常为字符串本身的值保留15或22个字节。除了SSO的大小之外，字符串在堆上分配内存，堆至少有存储值所需的大小。因此：\par
+
+\begin{codebox}[cpp]
+std::string s0;
+std::string s1{"short"};
+std::string s2{"a string with an extraordinarily long value"};
+\end{codebox}
+
+可能会得到如下输出:\par
+
+\begin{itemize}
+  \item 平台 A:
+  \begin{myOutput}
+  - s0 capa: 15 ('') \\
+  s1 capa: 15 ('short') \\
+  s2 capa: 43 ('a string with an extraordinarily long value')
+  \end{myOutput}
+  \item 平台 B:
+  \begin{myOutput}
+  - s0 capa: 22 ('') \\
+  s1 capa: 22 ('short') \\
+  s2 capa: 47 ('a string with an extraordinarily long value')
+  \end{myOutput}
+\end{itemize}
+
+这里，两个平台都支持SSO(最多15或22个字符)，当只需要43个字符的内存时，第二个平台为47个字符分配内存。\par
+
+所有平台上，已移动字符串通常为空，即使值没有存储在外部分配的内存中(因此我们必须复制所有字符)。\par
+
+\begin{codebox}[cpp]
+std::string s3{std::move(s1)};
+std::string s4{std::move(s2)};
+\end{codebox}
+
+会得到这样的结果:\par
+
+\begin{itemize}
+  \item 平台 A:
+  \begin{myOutput}
+  - s1 capa: 15 ('') \\
+  s2 capa: 15 ('') \\
+  s3 capa: 15 ('short') \\
+  s4 capa: 43 ('a string with an extraordinarily long value')
+  \end{myOutput}
+  \item 平台 B:
+  \begin{myOutput}
+  - s1 capa: 22 ('') \\
+  s2 capa: 22 ('') \\
+  s3 capa: 22 ('short') \\
+  s4 capa: 47 ('a string with an extraordinarily long value')
+  \end{myOutput}
+\end{itemize}
+
+注意，这里不能保证\textit{s1}变成空的。C++标准库只保证从字符串中移动的字符串处于有效但未指定的状态，这意味着\textit{s1}的值仍然可以是“short”，或是其他值。\par
+
+移动时分配不同的字符串值可能会缩小容量。示例程序的最后两个步骤基本上执行:\par
+
+\begin{codebox}[cpp]
+std::string s4{"a string with an extraordinarily long value"};
+std::string s5{"quite a reasonable value"};
+s4 = std::move(s5);
+\end{codebox}
+
+在实践中会有以下输出:\par
+
+\begin{itemize}
+  \item 内存交换:
+  \begin{myOutput}
+  - s4 capa: 43 ('a string with an extraordinarily long value') \\
+  s5 capa: 24 ('quite a reasonable value') \\
+  - s4 capa: 24 ('quite a reasonable value') \\
+  s5 capa: 43 ('')
+  \end{myOutput}
+  \item 移动内存(释放旧内存后):
+  \begin{myOutput}
+  - s4 capa: 47 ('a string with an extraordinarily long value') \\
+  s5 capa: 31 ('quite a reasonable value') \\
+  - s4 capa: 31 ('quite a reasonable value') \\
+  s5 capa: 22 ('')
+  \end{myOutput}
+\end{itemize}
+
+\textit{s4}的容量通常会缩小，有时缩小到目标的容量，有时缩小到空字符串的最小容量。然而，两者都不能完全保证。\par
+
+
+\section{容器的移动语义}
+
+容器通常是必须分配内存来保存其元素的对象。因此，可以从使用移动语义中获益。但有例外:std::\allowbreak{}array<\allowbreak{}>不在堆上分配内存，这意味着对std::array<>应该使用特殊规则。\par
+
+书中已经有了几个关于容器如何支持移动语义的例子。最初的例子中，了解了支持的移动语义:\par
+
+\begin{itemize}
+  \item 通过重载\textit{push\_\allowbreak{}back(\allowbreak{})\allowbreak{}}，C++标准支持移动语义来插入新元素。
+  \item 通过提供移动构造函数和移动赋值操作符，降低复制临时对象(比如返回值)的成本。
+\end{itemize}
+
+执行以下操作时，所有容器都支持移动语义:\par
+
+\begin{itemize}
+  \item 复制容器
+  \item 赋值容器
+  \item 插入容器
+\end{itemize}
+
+然而，还有更多。\par
+
+\mySmallsection{15.2.1 基本移动支持容器整体}
+
+所有容器都定义了一个移动构造函数和移动赋值操作符，以支持未命名临时对象和\textit{std::move()}标记对象的移动语义。\par
+
+例如，std::list<>的声明如下:\par
+
+\begin{codebox}[cpp]
+template<typename T, typename Allocator = allocator<T>>
+class list {
+  public:
+  ...
+  list(const list&); // copy constructor
+  list(list&&); // move constructor
+  list& operator=(const list&); // copy assignment
+  list& operator=(list&&) noexcept( ... ); // move assignment
+  ...
+};
+\end{codebox}
+
+这使得按值返回/传递容器并赋值的成本变低。例如:\par
+
+\begin{codebox}[cpp]
+std::list<std::string> createAndInsert()
+{
+  std::list<std::string> coll;
+  ...
+  return coll; // move constructor if not optimized away
+}
+std::list<std::string> v;
+...
+v = createAndInsert(); // move assignment
+\end{codebox}
+
+但请注意，这里有附加的要求和保证，这适用于除std::array<>之外的所有容器的移动构造函数和移动赋值操作符。这些要求和保证意味着已移动的容器移动是空的。\par
+
+\mySmallsection{容器移动构造函数的保证}
+
+对于移动构造函数:\par
+
+\begin{codebox}[cpp]
+ContainerType cont1{ ... };
+ContainerType cont2{std::move(cont1)}; // move the container
+\end{codebox}
+
+C++标准规定了常量复杂度，移动的持续时间不取决于元素的数量。\par
+
+有了这种保证，实现者没有其他选择，只能从源对象\textit{cont1}整体窃取元素的内存到目标对象\textit{cont2}，使源对象\textit{cont1}处于初始/空状态。\par
+
+可能会认为移动构造函数也可以在源对象中创建新值，但这没有多大意义，因为这只会使操作变慢。\par
+
+对于vector，甚至间接禁止从已移动对象中获取值，因为std::vector<>的移动构造函数不会抛出异常:\par
+
+\begin{codebox}[cpp]
+template<typename T, typename Allocator = allocator<T>>
+class vector {
+  public:
+  ...
+  vector(const vector&); // copy constructor
+  vector(vector&&) noexcept; // move constructor
+  ...
+};
+\end{codebox}
+
+总之，在移动构造函数中使用容器作为源时，有以下保证:\par
+
+\begin{itemize}
+  \item 对于vector，本质上要求已移动的容器为空。
+  \item 对于其他容器(除了std::array<>)，不是严格要求为空，但实现为其他也没什么意义。
+\end{itemize}
+
+\mySmallsection{容器移动赋值操作符的保证}
+
+对于移动赋值操作符:\par
+
+\begin{codebox}[cpp]
+ContainerType cont1{ ... }, cont2{ ... };
+cont2 = std::move(cont1); // move assign the container
+\end{codebox}
+
+C++标准保证此操作会覆盖或销毁目标对象\textit{cont2}的每个元素。这保证了目标容器\textit{dest2}的元素在条目时拥有的所有资源都会进行释放。因此，只有两种方法来实现移动赋值:\par
+
+\begin{itemize}
+  \item 销毁旧的元素，并将源的全部内容移动到目标(即，将指向内存的指针从源移动到目标)。
+  \item 一个元素一个元素地从源\textit{cont1}移动到目标\textit{cont2}，并销毁目标中未覆盖的所有剩余元素。
+\end{itemize}
+
+这两种方法的复制度都线性的，在这个定义中，不允许仅交换源和目标的内容。\par
+
+然而，自C++17以来，所有容器都保证在内存可互换时不会抛出异常。例如:\par
+
+\begin{codebox}[cpp]
+template<typename T, typename Allocator = allocator<T>>
+class list {
+public:
+  ...
+  list& operator=(list&&)
+  noexcept(allocator_traits<Allocator>::is_always_equal::value);
+  ...
+};
+\end{codebox}
+
+noexcept对赋值操作符的保证，排除了将移动赋值实现为逐个元素移动的第二种方法。移动操作可能会抛出异常，只有销毁旧元素的实现才不会抛出。因此，当内存可以互换时，必须使用第一种方法来实现移动赋值操作符。\par
+
+总之，移动赋值中使用容器作为源，实际上有以下保证:\par
+
+\begin{itemize}
+  \item 如果内存是可互换的(使用默认标准分配器时尤其如此)，则基本上要求从移动的容器为空。这适用于除std::array<>之外的所有容器。
+  \item 否则，移动的容器处于有效但未定义的状态。
+\end{itemize}
+
+但请注意，在给自己移动赋值之后，容器总处于未定义但有效的状态。\par
+
+\mySmallsection{15.2.2 Insert和Emplace函数}
+
+所有容器都支持将新元素移动到容器中。\par
+
+\mySmallsection{Insert函数}
+
+例如，vector通过\textit{push\_\allowbreak{}back(\allowbreak{})\allowbreak{}}的两种不同实现来支持移动语义:\par
+
+\begin{codebox}[cpp]
+template<typename T, typename Allocator = allocator<T>>
+class vector {
+public:
+  ...
+
+  // insert a copy of elem:
+  void push_back (const T& elem);
+
+  // insert elem when the value of elem is no longer needed:
+  void push_back (T&& elem);
+  ...
+};
+\end{codebox}
+
+rvalue的\textit{push\_\allowbreak{}back(\allowbreak{})\allowbreak{}}函数用\textit{std::move()}传递传递的元素，这样就调用了元素类型的移动构造函数，而不是复制构造函数。\par
+
+同样，所有容器都有相应的重载。例如:\par
+
+\begin{codebox}[cpp]
+template<typename Key, typename T, typename Compare = less<Key>,
+typename Allocator = allocator<pair<const Key, T>>>
+class map {
+  public:
+  ...
+  pair<iterator, bool> insert(const value_type& x);
+  pair<iterator, bool> insert(value_type&& x);
+  ...
+};
+\end{codebox}
+
+\mySmallsection{Emplace函数}
+
+从C++11开始，容器也提供了Emplace函数(比如为向量提供了\textit{emplace\_\allowbreak{}back(\allowbreak{})\allowbreak{}})。可以传递多个参数来直接在容器中初始化新元素，而不是传递单个元素类型参数(或可转换为元素类型)。这样就可以保存副本或移动。\par
+
+注意，即使这样，容器也可以通过为构造函数的初始参数支持移动语义，并从移动语义中获益。\par
+
+像\textit{emplace\_\allowbreak{}back(\allowbreak{})\allowbreak{}}这样的函数可以使用完美转发来避免创建所传递参数的副本。例如，对于std::vector<>，emplace\_back()成员函数的定义如下:\par
+
+\begin{codebox}[cpp]
+template<typename T, typename Allocator = allocator<T>>
+class vector {
+  public:
+  ...
+  // insert a new element with perfectly forwarded arguments:
+  template<typename... Args>
+  constexpr T& emplace_back(Args&&... args) {
+    ...
+    // call the constructor with the perfectly forwarded arguments:
+    place_element_in_memory(T(std::forward<Args>(args)...));
+    ...
+  }
+  ...
+};
+\end{codebox}
+
+在vector内部使用完全转发的参数初始化新元素。\par
+
+\mySmallsection{15.2.3 std::\allowbreak{}array<\allowbreak{}>的移动语义}
+
+array<>是唯一没有在堆上分配内存的容器。实际上，是通过带有数组成员的模板化C数据结构实现的:\par
+
+\begin{codebox}[cpp]
+template<typename T, size_t N>
+struct array {
+  T elems[N];
+  ...
+};
+\end{codebox}
+
+因此，不能以移动指针到内部内存的方式来实现移动操作。\par
+
+因此，std::\allowbreak{}array<\allowbreak{}>有两个保证:\par
+
+\begin{itemize}
+  \item 移动构造函数具有线性复杂度，必须逐个元素地移动。
+  \item 移动赋值操作符可能总是抛出异常，因为它必须逐个元素地移动赋值。
+\end{itemize}
+
+因此，复制或移动一个数值数组没有区别:\par
+
+\begin{codebox}[cpp]
+std::array<double, 1000> arr;
+...
+auto arr2{arr}; // copies all double elements/values
+auto arr3{std::move(arr)}; // still copies all double elements/values
+\end{codebox}
+
+对于所有其他容器，后者将只移动指向新对象的内部指针，这是一个成本非常低的操作。\par
+
+但是，如果移动元素比复制元素成本还要低，那么移动仍然比复制要好。例如:\par
+
+\begin{codebox}[cpp]
+std::array<std::string, 1000> arr;
+...
+auto arr2{arr}; // copies string by string
+auto arr3{std::move(arr)}; // moves string by string
+\end{codebox}
+
+如果字符串分配堆内存(即，如果使用小字符串优化(SSO)，则有一个显著的大小)，那么移动字符串数组通常会更快。\par
+
+可以通过lib/contmove.cpp看到这一点，它检查复制和移动不同元素类型(双精度、小字符串和大字符串)的数组和vector之间的区别。请注意，在不同平台上，因为生成的代码具有不同的优化，复制和移动双精度数组或小字符串之间可能存在微小的性能差异。\par
+
+
+\section{词汇类型的移动语义}
+
+C++标准库提供了两种词汇表类型，用于使用值语义处理一个或多个值(对象自动地和整体地保存和复制它们的值)。\par
+
+原则上，都提供了移动语义。然而，其中有一些需要专门讨论和说明。\par
+
+\mySmallsection{15.3.1 pair的移动语义}
+
+std::pair<>是很好的例子，展示了移动语义的好处和复杂性。原则上，只有一个具有两个成员的通用数据结构(在命名空间std中定义):\par
+
+\begin{codebox}[cpp]
+template<typename T1, typename T2>
+struct pair {
+  T1 first;
+  T2 second;
+  ...
+};
+\end{codebox}
+
+为了支持移动语义(以及其他一些棘手的案例，如引用成员)，有以下声明(这里，使用了C++14版本，并做了一些利于可读性的工作):\par
+
+\begin{codebox}[cpp]
+template<typename T1, typename T2>
+struct pair {
+  // types of each member:
+  using first_type = T1; // same as: typedef T1 first_type
+  using second_type = T2;
+  // the members:
+  T1 first;
+  T2 second;
+
+  // constructors:
+  constexpr pair();
+  constexpr pair(const T1& x, const T2& y);
+  template<typename U, typename V> constexpr pair(U&& x, V&& y);
+  pair(const pair&) = default;
+  pair(pair&&) = default;
+  template<typename U, typename V> constexpr pair(const pair<U, V>& p);
+  template<typename U, typename V> constexpr pair(pair<U, V>&& p);
+  template<typename... Args1, typename... Args2>
+  pair(piecewise_construct_t, tuple<Args1...> first_args,
+  tuple<Args2...> second_args);
+
+  // assignments:
+  pair& operator=(const pair& p);
+  pair& operator=(pair&& p) noexcept( ... );
+  template<typename U, typename V> pair& operator=(const pair<U, V>& p);
+  template<typename U, typename V> pair& operator=(pair<U, V>&& p);
+
+  // other:
+  void swap(pair& p) noexcept( ... );
+};
+\end{codebox}
+
+该类支持移动语义。有一个默认的移动构造函数和一个已实现的移动赋值操作符(如果两种成员类型都保证不抛出异常，则对应的noexcept条件是不抛出异常):\par
+
+\begin{codebox}[cpp]
+template<typename T1, typename T2>
+struct pair {
+  ...
+  pair(pair&&) = default;
+  ...
+  pair& operator=(pair&& p) noexcept( ... );
+  ...
+};
+\end{codebox}
+
+因此，代码如下:\par
+
+\begin{codebox}[cpp]
+std::pair<std::string, std::string> p1{"some value", "some other value"};
+auto p2{p1};
+auto p3{std::move(p1)};
+std::cout << "p1: " << p1.first << '/' << p1.second << '\n';
+std::cout << "p2: " << p2.first << '/' << p2.second << '\n';
+std::cout << "p3: " << p3.first << '/' << p3.second << '\n';
+\end{codebox}
+
+有如下输出:\par
+
+\begin{myOutput}
+p1: / \\
+p2: some value/some other value \\
+p3: some value/some other value
+\end{myOutput}
+
+但是，std::pair<>也可以通过处理通用/转发引用支持完美转发:\par
+
+\begin{codebox}[cpp]
+template<typename T1, typename T2>
+struct pair {
+  ...
+  template<typename U, typename V> constexpr pair(U&& x, V&& y);
+  ...
+};
+\end{codebox}
+
+因此，可以在初始化pair时使用移动语义。例如:\par
+
+\begin{codebox}[cpp]
+int val = 42;
+std::string s1{"value of s1"};
+std::pair<std::string, std::string> p4{std::to_string(val), std::move(s1)};
+
+std::cout << "s1: " << s1 << '\n';
+std::cout << "p4: " << p4.first << '/' << p4.second << '\n';
+\end{codebox}
+
+有如下输出:\par
+
+\begin{myOutput}
+s1: \\
+p4: 42/value of s1
+\end{myOutput}
+
+相应的成员模板实现为期望的通用/转发引用:\par
+
+\begin{codebox}[cpp]
+template<typename U, typename V>
+constexpr pair::pair(U&& x, V&& y)
+: first(std::forward<U>(x)), second(std::forward<V>(y)) {
+}
+\end{codebox}
+
+注意，通用引用/转发引用还意味着，只要定义了相应的类型转换，就可以创建和赋值不同的pair。例如:\par
+
+\begin{codebox}[cpp]
+std::pair<const char*, std::string> p5{"answer", "is 42"};
+auto p6{std::move(p5)};
+
+std::cout << "p5: " << p5.first << '/' << p5.second << '\n';
+std::cout << "p6: " << p6.first << '/' << p6.second << '\n';
+\end{codebox}
+
+有如下输出:\par
+
+\begin{myOutput}
+p5: answer/ \\
+p6: answer/is 42
+\end{myOutput}
+
+初始化\textit{p6}时，将\textit{p5}的第一个成员(声明为const char*)转换为std::string，而在使用\textit{p5}的第二个成员初始化\textit{p6}的第二个成员时使用移动语义。\par
+
+最后，注意std::pair<>支持具有引用类型的成员。在这种情况下，当为这些成员使用\textit{std::move()}时将应用特殊规则。参见basics/members.cpp获取完整的示例。\par
+
+\mySmallsection{std::make\_pair()}
+
+std::pair<>附带了一个方便的函数模板std::make\_pair<>()，用于创建pair而不必指定成员的类型:\par
+
+\begin{codebox}[cpp]
+auto p{std::make_pair(42, "hello")}; // creates std::pair<int, const char*>
+\end{codebox}
+
+std::make\_pair<>()是一个很好的例子，它演示了在rvalue和通用/转发引用中使用移动语义时必须考虑的另一件事。它的声明在不同的C++标准中有所不同:\par
+
+\begin{itemize}
+  \item 第一个C++标准是C++98中，make\_pair<>()是在命名空间std中使用引用来声明的，以避免不必要的复制:
+\begin{codebox}[cpp]
+  template<typename T1, typename T2>
+  pair<T1,T2> make_pair (const T1& a, const T2& b)
+  {
+    return pair<T1,T2>(a,b);
+  }
+\end{codebox}
+  然而，当使用成对的字符串字面值或原始数组时，会导致了严重的问题。例如，当"hello"作为第二个实参传递时，对应形参\textit{b}的类型成为对const char数组(const char(\&)[6])的引用。因此，char类型[6]推导为T2类型，并用作第二个成员的类型。但是，不能使用数组初始化数组成员，因为不能复制数组。\par
+  这种情况下，应该使用衰变的类型作为成员类型，这是按值传递参数时获得的类型(const char*表示字符串)。
+
+  \item 因此，C++03中，函数定义改为使用按值调用:
+\begin{codebox}[cpp]
+  template<typename T1, typename T2>
+  pair<T1,T2> make_pair (T1 a, T2 b)
+  {
+    return pair<T1,T2>(a,b);
+  }
+\end{codebox}
+  正如在问题解决方案的基本原理中看到的那样，“这似乎是对标准的建议小得多的更改，并且效率方面都被解决方案的优势抵消了。”
+
+  \item C++11中，make\_pair()必须支持移动语义，这意味着参数必须成为通用/转发引用。同样，对于引用，参数的类型不会衰减。因此，定义变更如下:
+\begin{codebox}[cpp]
+  template<typename T1, typename T2>
+  constexpr pair<typename decay<T1>::type, typename decay<T2>::type>
+  make_pair (T1&& a, T2&& b)
+  {
+    return pair<typename decay<T1>::type,
+    typename decay<T2>::type>(forward<T1>(a),
+    forward<T2>(b));
+  }
+\end{codebox}
+  C++14中可以写成这样:
+\begin{codebox}[cpp]
+  template<typename T1, typename T2>
+  constexpr pair<decay_t<T1>, decay_t<T2>>
+  make_pair (T1&& a, T2&& b)
+  {
+    return pair<decay_t<T1>, decay_t<T2>>(forward<T1>(a), forward<T2>(b));
+  }
+\end{codebox}
+\end{itemize}
+
+真正的实现更加复杂，因为C++11:为了支持\textit{std::ref()}和\textit{std::cref()}，还使用了\textit{std::\allowbreak{}reference\_\allowbreak{}wrapper<\allowbreak{}>}。\par
+
+C++标准库以类似的方式在许多地方完美地转发参数，通常还会结合使用std::decay<>。\par
+
+\mySmallsection{15.3.2 std::\allowbreak{}optional<\allowbreak{}>的移动语义}
+
+std::\allowbreak{}optional<\allowbreak{}>是C++17中可用的值类型，通过“没有任何值”扩展包含所有可能的类型值。这避免了为具有此语义而标记该类型的特定值(例如，指针值0)。\par
+
+optional对象也支持移动语义。如果将对象作为一个整体移动，状态将复制，所包含的对象(如果有的话)将移动。因此，一个已移动的对象仍然具有相同的状态，但任何值都变成未定义的。\par
+
+但也可以将值移进或移出所包含的对象。例如:\par
+
+\begin{codebox}[cpp]
+std::optional<std::string> os;
+std::string s = "a very very very long string";
+os = std::move(s); // OK, moves
+std::string s2 = *os; // OK, copies
+std::string s3 = std::move(*os); // OK, moves
+\end{codebox}
+
+注意，在最后一次调用之后，\textit{os}仍然有一个字符串值，但与通常的已移动对象一样，这个值未定义。因此，只要不对其值做任何假设，就可以使用它。甚至可以在那里赋一个新的字符串值。\par
+
+还请注意，有些重载确保临时optional可移动。考虑一个返回可选字符串的函数:\par
+
+\begin{codebox}[cpp]
+std::optional<std::string> func();
+\end{codebox}
+
+这种情况下，定义了移动值:\par
+
+\begin{codebox}[cpp]
+std::string s4 = func().value(); // OK, moves
+std::string s5 = *func(); // OK, moves
+\end{codebox}
+
+这种行为可以通过使用引用限定符，为相应的成员函数提供rvalue重载来实现:\par
+
+\begin{codebox}[cpp]
+namespace std {
+  template<typename T>
+  class optional {
+    ...
+    constexpr T& operator*() &;
+    constexpr const T& operator*() const&;
+    constexpr T&& operator*() &&;
+    constexpr const T&& operator*() const&&;
+
+    constexpr T& value() &;
+    constexpr const T& value() const&;
+    constexpr T&& value() &&;
+    constexpr const T&& value() const&&;
+  };
+}
+\end{codebox}
+
+通过使用引用限定符，类可以在对rvalue(临时对象或标记为\textit{std::move()}的对象)调用操作时返回移动值。:\par
+
+\begin{codebox}[cpp]
+std::vector<std::string> coll;
+std::optional<std::string> optStr;
+...
+coll.push_back(std::move(optStr).value()); // OK, moves from member into coll
+\end{codebox}
+
+注意，std::\allowbreak{}optional<\allowbreak{}>是C++标准库中少数使用\textit{const} ravlue引用的类型。原因是std::optional<>是一个包装器类型，它希望确保操作正确，即使\textit{const}对象标记为\textit{std::move()}，并且所包含的类型为const rvalue引用提供了特殊行为。\par
+
+
+\section{智能指针的移动语义}
+
+原始指针不能从移动语义中获益(它们的地址值总是副本)，而智能指针可以从移动语义中获益。\par
+
+\begin{itemize}
+  \item 共享指针(std::shared\_ptr<>)支持移动语义，因为移动共享指针比复制共享指针廉价得多。
+  \item 唯一指针(std::unique\_ptr<>)甚至只支持移动语义，因为不可能复制unique指针。
+\end{itemize}
+
+\mySmallsection{15.4.1 std::shared\_ptr<>的移动语义}
+
+共享指针有共享所有权的概念。多个共享指针可以“拥有”同一个对象，当最后一个所有者销毁(或获得一个新值)时，将调用所拥有对象的“删除器”。\par
+
+例如:\par
+
+\begin{codebox}[cpp]
+{
+  std::shared_ptr<int> sp1; // init shared pointer that does not own anything
+  {
+    auto sp2{std::make_shared<int>(42)}; // init shared pointer that owns new int
+    ...
+    sp1 = sp2; // sp1 and sp2 now share ownership
+    ...
+    *sp2 = 77; // modify value via sp2
+    ...
+  } // sp2 destroyed, sp1 is the only owner
+  std::cout << *sp1 << '\n'; // use modified value via sp1
+} // last owner destroyed so that delete is called
+\end{codebox}
+
+这个例子中，赋值操作符复制了int对象的所有。之后，两个共享指针都拥有该对象。但请注意，复制所有权是非常昂贵的操作。这是因为计数器必须跟踪所有者的数量:\par
+
+\begin{itemize}
+  \item 每次复制一个共享指针时，所有者计数器就递增
+  \item 每次销毁共享指针或赋值时，所有者计数器就递减
+\end{itemize}
+
+此外，修改计数器的值代价很高，因为修改是原子操作，可以避免多线程处理拥有相同对象的共享指针时出现的问题。\par
+
+因此，通过引用遍历共享指针集合要廉价得多:\par
+
+\begin{codebox}[cpp]
+std::vector<std::shared_ptr< ... >> coll;
+...
+for (auto sp : coll) { // expensive
+  ...
+}
+...
+for (const auto& sp : coll) { // cheap
+  ...
+}
+\end{codebox}
+
+对于移动语义，最好是移动共享指针而不是复制它们。例如，不要这样实现:\par
+
+\begin{codebox}[cpp]
+std::shared_ptr<int> lastPtr; // init shared pointer that does not own anything
+while ( ... ) {
+  auto ptr{std::make_shared<int>(getValue())}; // init shared pointer that owns new int
+  ...
+  lastPtr = ptr; // expensive (note: ptr no longer used)
+} // ptr destroyed, lastPtr is the only owner
+\end{codebox}
+
+最好这样做:\par
+
+\begin{codebox}[cpp]
+std::shared_ptr<int> lastPtr; // init shared pointer that does not own anything
+while ( ... ) {
+  auto ptr{std::make_shared<int>(getValue())}; // init shared pointer that owns new int
+  ...
+  lastPtr = std::move(ptr); // cheap
+} // ptr destroyed, lastPtr is the only owner
+\end{codebox}
+
+因此，当对象移动时，具有共享指针成员的对象将失去这些成员所指向的资源的所有权。这对性能有好处，但会创建无效的从状态移动。因此，应该对拥有std::shared\_ptr<>类型成员的已移动对象的状态进行双重检查。\par
+
+\mySmallsection{15.4.2 std::unique\_ptr<>的移动语义}
+
+类模板std::unique\_ptr<>实现了独占所有权的概念。类型系统确保一个对象在任何时候只能有一个所有者。技巧是使用类型系统来禁用复制唯一指针。因为这个检查是在编译时完成的，所以这种方法不会在运行时引入任何显著的性能开销。\par
+
+可以在函数中创建unique指针，并将其返回给调用者:\par
+
+\begin{codeboxt}[cpp]{lib/uniqueptr1.cpp}
+#include <iostream>
+#include <string>
+#include <memory>
+
+std::unique_ptr<std::string> source()
+{
+  static long id{0};
+  // create string with new and let ptr own it:
+  auto ptr = std::make_unique<std::string>("obj" + std::to_string(++id));
+  ...
+  return ptr; // transfer ownership to caller
+}
+
+int main()
+{
+  std::unique_ptr<std::string> p;
+  for (int i = 0; i < 10; ++i) {
+    p = source(); // p gets ownership of the returned object
+                  //(previously returned object of source() is deleted)
+    std::cout << *p << '\n';
+    ...
+  }
+} // last-owned object of p is deleted
+\end{codeboxt}
+
+和已移动类型一样，要将所有权传递给接收器函数，只能通过\textit{std::move()}传递:\par
+
+\begin{codebox}[cpp]
+std::vector<std::unique_ptr<std::string>> coll;
+std::unique_ptr<std::string> up;
+...
+coll.push_back(up); // ERROR: copying disabled
+coll.push_back(std::move(up); // OK, moves ownership into new element of coll
+\end{codebox}
+
+如果传递unique指针给一个通过引用接受参数的潜在接收器函数，则不知道所有权是否已经移动。所有权是否转移取决于功能的实现。这种情况下，可以用bool()操作符再次检查状态:\par
+
+\begin{codebox}[cpp]
+std::unique_ptr<std::string> up;
+...
+sink(std::move(up)); // might move ownership to sink()
+if (up) { // does it still have the ownership?
+  ...
+}
+\end{codebox}
+
+或者，可以确保所有权消失(资源释放):\par
+
+\begin{codebox}[cpp]
+std::unique_ptr<std::string> up;
+...
+sink(std::move(up)); // might move ownership to sink()
+up.reset(); // ensure ownership is gone (resource deleted)
+\end{codebox}
+
+
+\section{输入输出流的移动语义}
+
+IOStreams在C++98中引入，作为一种可以读写的抽象(标准I/O，文件，甚至字符串)。这是早期的设定，不可能复制这些对象(复制打开的文件的对象意味着什么，对相同的文件有两个句柄或复制文件，以及如何同步访问?)\par
+
+自从C++11以来，移动语义允许我们移动IOStream对象，并使用临时流。\par
+
+\mySmallsection{15.5.1 移动IOStream对象}
+
+考虑如下示例:\par
+
+\begin{codeboxt}[cpp]{lib/outfile.cpp}
+#include <iostream>
+#include <fstream>
+#include <stream>
+
+std::ofstream openToWrite(const std::string& name)
+{
+  std::ofstream file(name); // open a file to write to
+  if (!file) {
+    std::cerr << "can't open file '" << name << "'\n";
+    std::exit(EXIT_FAILURE);
+  }
+  return file; // return ownership (open file)
+}
+
+void storeData(std::ofstream fstrm) // takes ownership of file (but this might change)
+{
+  fstrm << 42 << '\n';
+} // closes the file
+
+int main()
+{
+  auto outFile{openToWrite("iostream.tmp")}; // open file
+  storeData(std::move(outFile)); // store data
+
+  // better ensure that the file is closed:
+  if (outFile.is_open()) {
+    outFile.close();
+  }
+}
+\end{codeboxt}
+
+这里，函数openToWrite()打开并返回输出文件流:\par
+
+\begin{codebox}[cpp]
+std::ofstream openToWrite(const std::string& name)
+{
+  std::ofstream file(name); // open a file to write to
+  ...
+  return file; // return ownership (open file)
+}
+\end{codebox}
+
+使用返回值初始化\textit{outFile}，并将其传递给\textit{storeData()}:\par
+
+\begin{codebox}[cpp]
+auto outFile{openToWrite("iostream.tmp")}; // open file
+storeData(std::move(outFile)); // store data
+\end{codebox}
+
+因为\textit{storeData()}按值接受参数，所以它有打开文件的所有权。因此，在\textit{storeData()}的末尾，文件关闭:\par
+
+\begin{codebox}[cpp]
+void storeData(std::ofstream fstrm) // takes ownership of file (but this might change)
+{
+  ...
+} // closes the file
+\end{codebox}
+
+但是，\textit{storeData()}也可以通过引用来获取参数，这意味着它不一定需要获取所有权。这种情况下，需要再次检查传递参数\textit{outFile}的状态:\par
+
+\begin{codebox}[cpp]
+// better ensure that the file is closed:
+if (!outFile.is_closed()) {
+  outFile.close();
+}
+\end{codebox}
+
+调用\textit{outFile.close(\allowbreak{})\allowbreak{}}通常就足够了，但如果文件流已经关闭，则会设置该文件流的\textit{failbit}。\par
+
+\mySmallsection{15.5.2 使用临时IOStreams}
+
+自C++11开始，IOStreams库也提供了函数重载来接受rvalue引用，允许接受临时对象。例如:\par
+
+\begin{codebox}[cpp]
+std::string s = "hello, world";
+std::ofstream("fstream1.tmp") << s << '\n'; // OK since C++11
+\end{codebox}
+
+甚至可以这样向流中写一个字符串字面值(使用C++11标准之前编译，其使用operator<<(const void*)输出字符串字面值的地址):\par
+
+\begin{codebox}[cpp]
+std::ofstream("fstream1.tmp") << "hello, world\n"; // correct since C++11
+// (wrote address before)
+\end{codebox}
+
+同样，可以用临时字符串流来解析给定的字符串:\par
+
+\begin{codebox}[cpp]
+std::string name, firstname, lastname;
+...
+name = "Tina Turner";
+std::istringstream{name} >> firstname >> lastname; // OK since C++11
+\end{codebox}
+
+最后，可以使用std::getline()来解析临时流的第一行:\par
+
+\begin{codebox}[cpp]
+std::string multiLineString, firstLine;
+...
+std::getline(std::stringstream{multiLineString}, // read from temporary string stream
+firstLine);
+\end{codebox}
+
+
+\section{多线程的移动语义}
+
+C++标准库有两个特殊的类型，代表正在运行的线程或用于同步。其中一些既不能复制也不能移动(例如，原子类型或条件变量)。然而，其中一些是只移动类型。让我们从移动语义的角度来看一些细节。\par
+
+\mySmallsection{15.6.1 std::\allowbreak{}thread<\allowbreak{}>和std::jthread<>}
+
+表示运行线程的对象(std::thread或C++20 std::\allowbreak{}jthread)可以传递，但不能复制。可以把它们放在容器里。\par
+
+考虑以下例子:\par
+
+\begin{codeboxt}[cpp]{lib/thread.cpp}
+#include <iostream>
+#include <thread>
+#include <vector>
+
+void doThis(const std::string& arg) {
+  std::cout << "doThis(): " << arg << '\n';
+}
+void doThat(const std::string& arg) {
+  std::cout << "doThat(): " << arg << '\n';
+}
+
+int main()
+{
+  std::vector<std::thread> threads; // better std::jthread since C++20
+
+  // start a couple of threads:
+  std::string someArg{"Black Lives Matter"};
+  threads.push_back(std::thread{doThis, someArg});
+  threads.push_back(std::thread{doThat, std::move(someArg)});
+  ...
+
+  // wait for all threads to end:
+  for (auto& t : threads) {
+    t.join();
+  }
+}
+\end{codeboxt}
+
+启动两个线程，并将它们放入所有运行线程的集合中:\par
+
+\begin{codebox}[cpp]
+std::vector<std::thread> threads; // better std::jthread since C++20
+
+std::string someArg{"black lives matter"};
+threads.push_back(std::thread{doThis, someArg});
+threads.push_back(std::thread{doThat, std::move(someArg)});
+\end{codebox}
+
+通过声明std::thread类型的对象(从C++20开始，最好使用std::jthread)来启动一个线程，并将临时对象移动到线程中。在可调用对象(函数, Lambda, 函数对象)的参数后面，可以传递额外的参数，这些参数在线程启动时传递给可调用对象。默认情况下，线程类的构造函数会复制这些参数。使用\textit{std::move()}切换到移动语义。因此，\textit{doThis()}获得传递给\textit{someArg}字符串的副本，而\textit{doThat()}获得该字符串的移动值。\par
+
+最后，等待所有线程的结束(使用std::thread时，这是避免段错误的必要条件):\par
+
+\begin{codebox}[cpp]
+// wait for all threads to end:
+for (auto& t : threads) {
+  t.join();
+}
+\end{codebox}
+
+\mySmallsection{15.6.2 Future, Promise和打包任务}
+
+对于一些用于同步两个线程之间(返回)值交换的helper类型，还使用了只移动类型(future、promise和打包任务都是只移动类型)。\par
+
+考虑以下例子:\par
+
+\begin{codeboxt}[cpp]{lib/future.cpp}
+#include <iostream>
+#include <string>
+#include <vector>
+#include <thread>
+#include <future>
+
+void getValue(std::promise<std::string> p)
+{
+  try {
+    std::string ret{"vote"};
+    ...
+    // store result:
+    p.set_value_at_thread_exit(std::move(ret));
+  }
+  catch(...) {
+    // store exception:
+    p.set_exception_at_thread_exit(std::current_exception());
+  }
+}
+int main()
+{
+  std::vector<std::future<std::string>> results;
+
+  // create promise and future to deal with outcome of the thread started:
+  std::promise<std::string> p;
+  std::future<std::string> f{p.get_future()};
+  results.push_back(std::move(f));
+
+  // start thread and move the promise to it:
+  std::thread t{getValue, move(p)};
+  t.detach(); // would not be necessary for std::jthread
+  ...
+
+  // wait for all threads to end:
+  for (auto& fut : results) {
+    std::cout << fut.get() << '\n';
+  }
+}
+\end{codeboxt}
+
+main()中，首先创建了promise，即能够将结果(值或异常)发送给能够读取它的关联future:\par
+
+\begin{codebox}[cpp]
+std::promise<std::string> p;
+std::future<std::string> f{p.get_future()};
+\end{codebox}
+
+future移动到future的集合中:\par
+
+\begin{codebox}[cpp]
+results.push_back(std::move(f));
+\end{codebox}
+
+也可以将\textit{p.get\_\allowbreak{}future(\allowbreak{})\allowbreak{}}的结果直接传递给\textit{push\_\allowbreak{}back(\allowbreak{})\allowbreak{}}:\par
+
+\begin{codebox}[cpp]
+results.push_back(p.get_future());
+\end{codebox}
+
+promise移动到已启动的线程:\par
+
+\begin{codebox}[cpp]
+std::thread t{getValue, move(p)};
+\end{codebox}
+
+线程将作为\textit{getValue()}的参数，\textit{getValue()}按值接受传递的promise:\par
+
+\begin{codebox}[cpp]
+void getValue(std::promise<std::string> p)
+{
+  ...
+}
+\end{codebox}
+
+通过这种方式，getValue()接收promise的所有权，并在线程结束时销毁通信机制的源.\par
+
+getValue()也可以通过引用的方式获取promise，因为启动的线程保存着已移动的promise值，直到结束为止。\par
+
+
+\section{总结}
+
+从本章讨论的类型中可以学到很多东西，在这里总结一下在C++标准库的类型中使用移动语义的几个通用的方面。\par
+
+\begin{itemize}
+  \item 已移动的标准字符串通常为空，但不能保证。
+  \item 如果没有使用特殊的分配器，则标准容器(std::\allowbreak{}array<\allowbreak{}>除外)通常为空。对于向量，这是可(间接)保证的;对于其他容器，可以间接地保证所有元素都移除或销毁，插入新成员没有意义。
+  \item 移动赋值可以改变字符串和vectgor的容量。
+  \item 为了在向通用/转发引用传递值时支持衰退(对于不同长度的字符串，通常需要推导出相同的类型)，使用类型特征std::decay<>。
+  \item 泛型包装器类型应该使用引用限定符重载访问包装对象的成员函数。这甚至可能意味着对\textit{const} rvalue引用使用重载。
+  \item 避免复制共享指针(例如，通过值传递它们)。
+  \item 用std::jthread(C++20之后可用)代替std::thread。
+\end{itemize}

@@ -1,0 +1,1071 @@
+% 第 3 章 类中的移动语义（由 tools/convert.py 从原 content/ 自动生成，勿手改）
+
+本章展示了如何在类中使用移动语义。展示了普通类如何从移动语义中获益，以及如何显式地在类中实现移动操作。\par
+
+
+\section{普通类中移动语义}
+
+假设有一个相当简单的类，其中的成员类型的移动语义可以让其不一样:\par
+
+\begin{codeboxt}[cpp]{basics/customer.hpp}
+#include <string>
+#include <vector>
+#include <iostream>
+#include <cassert>
+
+class Customer {
+private:
+  std::string name; // name of the customer
+  std::vector<int> values; // some values of the customer
+public:
+  Customer(const std::string& n)
+  : name{n} {
+    assert(!name.empty());
+  }
+
+  std::string getName() const {
+    return name;
+  }
+
+  void addValue(int val) {
+    values.push_back(val);
+  }
+
+  friend std::ostream& operator<< (std::ostream& strm, const Customer& cust) {
+    strm << '[' << cust.name << ": ";
+    for (int val : cust.values) {
+      strm << val << ' ';
+    }
+    strm << ']';
+    return strm;
+  }
+};
+\end{codeboxt}
+
+这个类有两个(可能)开销很大的成员，一个是字符串\textit{name}，一个是整型vector \textit{values}:\par
+
+\begin{codebox}[cpp]
+class Customer {
+private:
+  std::string name; // name of the customer
+  std::vector<int> values; // some values of the customer
+  ...
+};
+\end{codebox}
+
+复制这两个成员的成本很高\par
+
+\begin{itemize}
+  \item 要复制\textit{name}，我们必须为字符串的字符分配内存(除非\textit{name}很短，并且使用小字符串优化(SSO)实现字符串)。
+  \item 要复制这些值，必须为vector的元素分配内存。
+\end{itemize}
+
+如果有string类型的vector或者其他大型元素类型，那么开销会更大。例如，string类型vector的副本必须为元素的动态数组和每个元素所需的内存分配内存。\par
+
+好消息是，这样的类通常自动支持移动语义。自C++11以来，编译器通常会生成移动构造函数和移动赋值操作符(类似于自动生成复制构造函数和复制赋值操作符)。\par
+
+这样会有以下效果:\par
+
+\begin{itemize}
+  \item 按值返回本地\textit{Customer}将使用移动语义(如果它没有优化掉的话)。
+  \item 通过值传递未命名的\textit{Customer}对象将使用移动语义(如果没有优化掉的话)。
+  \item 按值传递临时的\textit{Customer}对象(例如，由另一个函数返回)将使用移动语义(如果它没有优化掉的话)。
+  \item 通过值传递一个标有\textit{std::move()}的\textit{Customer}对象将使用移动语义(如果它没有被优化掉的话)。
+\end{itemize}
+
+例如:\par
+
+\begin{codeboxt}[cpp]{basics/customer1.cpp}
+#include "customer.hpp"
+#include <iostream>
+#include <random>
+
+#include <utility> // for std::move()
+
+int main()
+{
+  // create a customer with some initial values:
+  Customer c{"Wolfgang Amadeus Mozart" };
+  for (int val : {0, 8, 15}) {
+    c.addValue(val);
+  }
+  std::cout << "c: " << c << '\n'; // print value of initialized c
+
+  // insert the customer twice into a collection of customers:
+  std::vector<Customer> customers;
+  customers.push_back(c); // copy into the vector
+  customers.push_back(std::move(c)); // move into the vector
+  std::cout << "c: " << c << '\n'; // print value of moved-from c
+
+  // print all customers in the collection:
+  std::cout << "customers:\n";
+  for (const Customer& cust : customers) {
+    std::cout << " " << cust << '\n';
+  }
+}
+\end{codeboxt}
+
+这里，创建并初始化一个\textit{customer c}(为了避免SSO，我们使用一个相当长的名称)。初始化\textit{c}后，第一个输出如下:\par
+
+\begin{myOutput}
+c: [Wolfgang Amadeus Mozart: 0 8 15 ]
+\end{myOutput}
+
+然后将这个\textit{customer}插入到vector中两次:复制一次，移动一次:\par
+
+\begin{codebox}[cpp]
+customers.push_back(c); // copy into the vector
+customers.push_back(std::move(c)); // move into the vector
+\end{codebox}
+
+然后，\textit{c}的输出:\par
+
+\begin{myOutput}
+c: [: ]
+\end{myOutput}
+
+第二次调用push\_back()时，名称和值都移到了vector的第二个元素中。但是，已移动的对象处于有效但未定义的状态。因此，第二个输出可以有任何值\textit{name}和\textit{values}:\par
+
+\begin{itemize}
+  \item 可能仍然有相同的值:\par
+  \begin{myOutput}
+  c: [Wolfgang Amadeus Mozart: 0 8 15 ]
+  \end{myOutput}
+  \item 可能有完全不同的值:\par
+  \begin{myOutput}
+  c: [value was moved away: 0 ]
+  \end{myOutput}
+\end{itemize}
+
+然而，移动语义是为了优化性能而提供，而分配不同的值并不一定是提高性能，所以在实现中通常把字符串和vector都设为空。\par
+
+任何情况下，我们都可以看到为\textit{Customer}类自动启用了移动语义。出于同样的原因，可以保证以下代码的高效:\par
+
+\begin{codebox}[cpp]
+Customer createCustomer()
+{
+  Customer c{ ... };
+  ...
+  return c; // uses move semantics if not optimized away
+}
+
+std::vector<Customer> customers;
+...
+customers.push_back(createCustomer()); // uses move semantics
+\end{codebox}
+
+详见basics/customer2.cpp的示例。\par
+
+自从C++11以来，类中能使用移动语义的成员，就会使用移动语义。这些类有:\par
+
+\begin{itemize}
+  \item 从不需要的源创建新对象，则使用成员的移动构造函数:\par
+\begin{codebox}[cpp]
+  Customer c1{ ... }
+  ...
+  Customer c2{std::move(c1)}; // move members of c1 to members of c2
+\end{codebox}
+  \item 移动赋值操作符如果从不再需要该的源赋值。\par
+\begin{codebox}[cpp]
+  Customer c1{ ... }, c2{ ... };
+  ...
+  c2 = std::move(c1); // move assign members of c1 to members of c2
+\end{codebox}
+\end{itemize}
+
+注意，通过显式实现以下改进，这样的类可以从移动语义获益:\par
+
+\begin{itemize}
+  \item 初始化成员时使用移动语义
+  \item 使用移动语义使获取函数既安全又快速
+\end{itemize}
+
+\mySmallsection{3.1.1 什么时候使用自启动移动语义的类?}
+
+编译器可以自动生成特殊的移动成员函数(移动构造函数和移动赋值操作符)。然而，也有一些限制。约束是编译器必须假定生成操作是正确的。正确的做法是优化正常的复制行为:移动成员，而不是复制成员。\par
+
+如果类改变了复制或赋值的常规行为，那么在优化这些操作时可能也必须做一些不同的事情。因此，当用户声明以下至少一个特殊成员函数时，将禁用移动操作的自动生成:\par
+
+\begin{itemize}
+  \item 复制构造函数
+  \item 复制赋值运算符
+  \item 另一个移动操作
+  \item 析构函数
+\end{itemize}
+
+注意，是“用户声明”。任何形式的复制构造函数、复制赋值操作符或析构函数的显式声明都禁用移动语义。例如，如果实现了一个什么也不做的析构函数，就禁用了移动语义:\par
+
+\begin{codebox}[cpp]
+class Customer {
+  ...
+  ~Customer() { // automatic move semantics is disabled
+  }
+};
+\end{codebox}
+
+即使下面的声明也足以禁用移动语义:\par
+
+\begin{codebox}[cpp]
+class Customer {
+  ...
+  ~Customer() = default; // automatic move semantics is disabled
+};
+\end{codebox}
+
+用户声明析构函数的行为为默认的，因此禁用了移动语义。通常，这种情况下，复制语义将作为一种退阶选择。\par
+
+因此没有特定的需要，就不要实现或声明析构函数(很多程序员都没有遵循这一规则)。\par
+
+这也意味着默认情况下，多态基类禁用了移动语义:\par
+
+\begin{codebox}[cpp]
+class Base {
+  ...
+  virtual ~Base() { // automatic move semantics is disabled
+  }
+};
+\end{codebox}
+
+注意，这意味着移动语义只对在这个基类中声明的成员禁用。对于派生类的成员，移动语义仍然会自动生成(如果派生类没有显式声明特殊的成员函数)。在讨论类层次中的移动语义时会讨论了这一点。\par
+
+\mySmallsection{3.1.2 生成的移动操作有负面影响的情况}
+
+请注意，生成的移动操作可能会引入问题，即使生成的复制操作工作正确。特别是在以下情况，必须小心:\par
+
+\begin{itemize}
+  \item 对成员变量有限制
+  \begin{itemize}
+    \item[-] 值有限制
+    \item[-] 值相互依赖
+  \end{itemize}
+  \item 使用了引用语义的成员(指针，智能指针，…)
+  \item 对象没有默认构造
+\end{itemize}
+
+可能出现的问题是，已移动的对象可能不再有效:可能破坏不变量，或者对象的析构函数失败。例如，本章中的\textit{Customer}类的对象可能会有空名称(即使我们有断言来避免这种情况)。关于已移动的那一章将对此进行详细讨论。\par
+
+
+\section{实现复制/移动函数}
+
+可以自己实现特殊的移动成员函数。这与实现复制构造函数和赋值操作符的方式大致相同。唯一的区别是形参需要声明为非\textit{const}右值引用，并且在实现内部必须指定在何处优化复制操作。\par
+
+让我们看一个类，同时实现了特殊的复制和移动成员函数，用于在对象复制和移动时:\par
+
+\begin{codeboxt}[cpp]{basics/customerimpl.hpp}
+#include <string>
+#include <vector>
+#include <iostream>
+#include <cassert>
+
+class Customer {
+  private:
+  std::string name; // name of the customer
+  std::vector<int> values; // some values of the customer
+  public:
+  Customer(const std::string& n)
+  : name{n} {
+    assert(!name.empty());
+  }
+
+  std::string getName() const {
+    return name;
+  }
+
+  void addValue(int val) {
+    values.push_back(val);
+  }
+
+  friend std::ostream& operator<< (std::ostream& strm, const Customer& cust) {
+    strm << '[' << cust.name << ": ";
+    for (int val : cust.values) {
+      strm << val << ' ';
+    }
+    strm << ']';
+    return strm;
+  }
+
+  // copy constructor (copy all members):
+  Customer(const Customer& cust)
+  : name{cust.name}, values{cust.values} {
+    std::cout << "COPY " << cust.name << '\n';
+  }
+
+  // move constructor (move all members):
+  Customer(Customer&& cust) // noexcept declaration missing
+  : name{std::move(cust.name)}, values{std::move(cust.values)} {
+    std::cout << "MOVE " << name << '\n';
+  }
+
+  // copy assignment (assign all members):
+  Customer& operator= (const Customer& cust) {
+    std::cout << "COPYASSIGN " << cust.name << '\n';
+    name = cust.name;
+    values = cust.values;
+    return *this;
+  }
+
+  // move assignment (move all members):
+  Customer& operator= (Customer&& cust) { // noexcept declaration missing
+    std::cout << "MOVEASSIGN " << cust.name << '\n';
+    name = std::move(cust.name);
+    values = std::move(cust.values);
+    return *this;
+  }
+};
+\end{codeboxt}
+
+让我们详细看看特殊的拷贝/移动成员函数的实现。\par
+
+请注意，手动实现移动构造函数和移动赋值操作符时，通常都应该有noexcept声明，这将在移动语义和noexcept章节中讨论。\par
+
+\mySmallsection{3.2.1 复制构造函数}
+
+复制构造函数的实现如下:\par
+
+\begin{codebox}[cpp]
+class Customer {
+private:
+  std::string name; // name of the customer
+  std::vector<int> values; // some values of the customer
+
+public:
+  ...
+  // copy constructor (copy all members):
+  Customer(const Customer& cust)
+  : name{cust.name}, values{cust.values} {
+    std::cout << "COPY " << cust.name << '\n';
+  }
+  ...
+};
+\end{codebox}
+
+自动生成的复制构造函数，只复制所有成员。实现中，我们只添加了一条打印特定\textit{customer}复制时的语句。\par
+
+\mySmallsection{3.2.2 移动构造函数}
+
+移动构造函数的实现如下:\par
+
+\begin{codebox}[cpp]
+class Customer {
+private:
+  std::string name; // name of the customer
+  std::vector<int> values; // some values of the customer
+public:
+  ...
+  // move constructor (move all members):
+  Customer(Customer&& cust) // noexcept declaration missing
+  : name{std::move(cust.name)}, values{std::move(cust.values)} {
+    std::cout << "MOVE " << name << '\n';
+  }
+  ...
+};
+\end{codebox}
+
+同样，这也是默认生成的移动构造函数所做的，并使用附加的打印语句进行扩展。\par
+
+与复制构造函数的区别是将形参声明为非\textit{const}右值引用然后移动成员。\par
+
+注意，这里非常重要的一点:移动语义没有传递。当使用\textit{cust}的成员初始化成员时，必须用\textit{std::move()}。没有这个，就只能复制它们(移动构造函数的性能与复制构造函数相同)。\par
+
+您可能想知道为什么没有传递移动语义。我们没有声明参数\textit{cust}只接受带有移动语义的对象吗?但请注意这里的语义:当调用者不再需要该值时，将调用该函数。在移动构造函数内部，现在有了要处理的值，必须决定在哪里需要它，需要多长时间。特别是，可能多次需要这个值，并且不会在第一次使用时丢失。\par
+
+因此，移动语义没有传递是一个特性，而不是一个bug。如果要传递移动语义，就不能使用两次传递了移动语义的对象。\par
+
+例如:\par
+
+\begin{codebox}[cpp]
+void insertTwice(std::vector<std::string>& coll, std::string&& str)
+{
+  coll.push_back(str); // copy str into coll
+  coll.push_back(std::move(str)); // move str into coll
+}
+\end{codebox}
+
+如果\textit{str}的所有使用都隐式地具有移动语义，则\textit{str}的值将在第一次\textit{push\_\allowbreak{}back(\allowbreak{})\allowbreak{}}调用时移走。\par
+
+这里需要学习的是，将形参声明为右值引用限制了可以传递给该函数的内容，但其行为与任何其他该类型的非\textit{const}对象一样。必须再次指定何时何地不再需要这个值。有关更多细节，后续正式讨论当右值变成左值时会继续。\par
+
+另一个注意事项:当复制构造函数的打印语句打印传递的客户的名称时:\par
+
+\begin{codebox}[cpp]
+Customer(const Customer& cust)
+: name{cust.name}, values{cust.values} {
+  std::cout << "COPY " << cust.name << '\n'; // cust.name still there
+}
+\end{codebox}
+
+移动构造函数不能使用\textit{custom.name}，因为在构造函数初始化时，该值可能已经移走了。必须使用新对象的成员:\par
+
+\begin{codebox}[cpp]
+Customer(Customer&& cust)
+: name{std::move(cust.name)}, values{std::move(cust.values)} {
+  std::cout << "MOVE " << name << '\n'; // have to use name (cust.name moved away)
+}
+\end{codebox}
+
+注意，应该始终使用noexcept规范来实现移动构造函数，以提高\textit{Customer} vector重新分配时的性能。\par
+
+\mySmallsection{3.2.3 复制赋值操作符}
+
+复制赋值操作符的实现如下:\par
+
+\begin{codebox}[cpp]
+class Customer {
+  private:
+  std::string name; // name of the customer
+  std::vector<int> values; // some values of the customer
+  public:
+  ...
+  // copy assignment (assign all members):
+  Customer& operator= (const Customer& cust) {
+    std::cout << "COPYASSIGN " << cust.name << '\n';
+    name = cust.name;
+    values = cust.values;
+    return *this;
+  }
+...
+};
+\end{codebox}
+
+与自动生成的复制赋值操作符一样，只需对所有成员进行赋值。唯一的区别是开头的打印语句。\par
+
+实现赋值操作符时，可以(也许应该)检查对象对自身的赋值。但请注意，生成的默认赋值操作符不会这样做，在讨论使用移动赋值操作符进行自我赋值时，请查看关于这一点的解释。\par
+
+您可能还希望使用引用限定符声明赋值操作符。\par
+
+\mySmallsection{3.2.4 移动赋值运算符}
+
+移动赋值操作符的实现如下:\par
+
+\begin{codebox}[cpp]
+class Customer {
+  private:
+  std::string name; // name of the customer
+  std::vector<int> values; // some values of the customer
+  public:
+  ...
+  // move assignment (steal all members):
+  Customer& operator= (Customer&& cust) { // noexcept declaration missing
+    std::cout << "MOVEASSIGN " << cust.name << '\n';
+    name = std::move(cust.name);
+    values = std::move(cust.values);
+    return *this;
+  }
+};
+\end{codebox}
+
+同样，必须将移动构造函数声明为接受非\textit{const}右值引用的函数。然后在主体中，必须实现如何改进通常的复制，因为我们可以从源对象中窃取值。\par
+
+本例中，我们做了自动生成的移动赋值操作符所做的事情:对函数体中的成员进行移动赋值，而不是复制赋值。此外，添加了打印语句。最后，返回对象以供进一步使用。\par
+
+注意，通常应该使用noexcept规范来实现移动赋值操作符。\par
+
+您可能还希望使用引用限定符声明移动赋值操作符。\par
+
+\mySmallsection{处理对象自身的移动分配}
+
+可能想知道在实现移动赋值操作符时，是否应该检查对象对自身的赋值。例如，自移动可能会发生如下情况:\par
+
+\begin{codebox}[cpp]
+Customer c{"GNU's Not Unix"};
+c = std::move(c); // move assigns c to itself
+\end{codebox}
+
+这看起来很容易避免，可以使用引用和指针。这种情况下，两个对象是否相同并不明显。下面的代码是一个非常简单的例子:\par
+
+\begin{codebox}[cpp]
+std::vector<Customer> coll;
+coll.emplace_back("GNU's Not Unix"); // coll has 1 element
+coll[0] = std::move(coll.back()); // move assigns the only element to itself
+\end{codebox}
+
+当对象自移动时，C++标准库中的所有类型都接收一个有效但未定义的状态。默认情况下，可能会丢失成员的值，如果类型不能正确地处理具有任意值的成员，甚至可能会遇到更严重的问题。事实上，在以下情况下，可能产生有问题的状态:\par
+
+\begin{itemize}
+  \item 已移动成员的一些值有问题
+  \item 成员的值相互依赖
+\end{itemize}
+
+防止自赋值的传统/简单方法是检查两个操作数是否相同(具有相同的地址)。在实现移动赋值操作符时也可以这样做:\par
+
+\begin{codebox}[cpp]
+Customer& operator= (Customer&& cust) { // noexcept declaration missing
+  std::cout << "MOVEASSIGN " << cust.name << '\n';
+  if (this != &cust) { // move assignment to myself?
+    name = std::move(cust.name);
+    values = std::move(cust.values);
+  }
+  return *this;
+}
+\end{codebox}
+
+使用这样的检查非常廉价，它的好处是对象将其值保存。但请注意，在递归数据结构中，如果(移动)子对象分配给父对象，也可能有问题。如果在赋给新值之前先删除父对象(拥有子对象)的旧值，可能会赋给一个已删除的对象。这种情况下，对象并不相同，所以比较它们的地址没有什么用。\par
+
+此外，考虑以下编程风格:\par
+
+\begin{itemize}
+  \item Scott Meyers在《Effective C++》一书中说，当使用助手类正确封装资源管理时(那时还没有移动语义)，自赋值通常不是问题。此外，他指出，还必须确保操作符的异常安全。
+  \item 《C++核心指南》将这个问题归类为“百万分之一的问题”，在实践中似乎并不相关。
+\end{itemize}
+
+似乎在大多数情况下，可以忽略自移动赋值，在你定义的类型中，提供了与C++标准库相同的保证:移动将一个对象赋值给它自己之后，该对象处于一个有效但未定义的状态。\par
+
+\mySmallsection{3.2.5 使用特殊的复制/移动成员函数}
+
+让我们用一个小程序来测试\textit{Customer}类:\par
+
+\begin{codeboxt}[cpp]{basics/customerimpl.cpp}
+#include "customerimpl.hpp"
+#include <iostream>
+#include <string>
+#include <vector>
+#include <algorithm>
+
+int main()
+{
+  std::vector<Customer> coll;
+  for (int i=0; i<12; ++i) {
+    coll.push_back(Customer{"TestCustomer " + std::to_string(i-5)});
+  }
+
+  std::cout << "---- sort():\n";
+  std::sort(coll.begin(), coll.end(),
+        [] (const Customer& c1, const Customer& c2) {
+           return c1.getName() < c2.getName();
+        });
+}
+\end{codeboxt}
+
+\mySmallsection{初始化}
+
+第一部分是有12个\textit{Customer}的向量的初始化:\par
+
+\begin{codebox}[cpp]
+std::vector<Customer> coll;
+for (int i=0; i<12; ++i) {
+  coll.push_back(Customer{"TestCustomer " + std::to_string(i-5)});
+}
+\end{codebox}
+
+这个初始化可能有以下输出:\par
+
+\begin{myOutput}
+MOVE TestCustomer -5 \\
+MOVE TestCustomer -4 \\
+COPY TestCustomer -5 \\
+MOVE TestCustomer -3 \\
+COPY TestCustomer -5 \\
+COPY TestCustomer -4 \\
+MOVE TestCustomer -2 \\
+MOVE TestCustomer -1 \\
+COPY TestCustomer -5 \\
+COPY TestCustomer -4 \\
+COPY TestCustomer -3 \\
+COPY TestCustomer -2 \\
+MOVE TestCustomer 0 \\
+MOVE TestCustomer 1 \\
+MOVE TestCustomer 2 \\
+MOVE TestCustomer 3 \\
+COPY TestCustomer -5 \\
+COPY TestCustomer -4 \\
+COPY TestCustomer -3 \\
+COPY TestCustomer -2 \\
+COPY TestCustomer -1 \\
+COPY TestCustomer 0 \\
+COPY TestCustomer 1 \\
+COPY TestCustomer 2 \\
+MOVE TestCustomer 4 \\
+MOVE TestCustomer 5 \\
+MOVE TestCustomer 6 \\
+\end{myOutput}
+
+每次插入新对象时，都会创建一个临时对象并将其移动到向量中。因此，对于每个元素，我们都有一个MOVE。\par
+
+另外，有几份副本上有COPY的标记。出现副本的原因:vector会不时重新分配其内部内存(容量)，以便它足够大，可以容纳所有元素。在这种情况下，vector从有存储1个元素的内存增长到有存储2个、4个、8个，最后是16个元素。因此，必须先复制1 2 4，然后是vector中已经存在的8个元素。在循环之前使用\textit{col.reserve(\allowbreak{}20)\allowbreak{}}可以避免这些副本的出现。但是，您可能想知道为什么这里不使用移动。这与缺少的noexcept声明有关，我们将在关于移动语义和noexcept的章节中讨论。\par
+
+注意，向vector增加容量的确切策略是特定于实现的。因此，当实现增长不同时，输出可能会有所不同(例如，每次增长50\%)。\par
+
+\mySmallsection{排序}
+
+接下来，我们按名称对所有元素进行排序:\par
+
+\begin{codebox}[cpp]
+std::sort(coll.begin(), coll.end(),
+  [] (const Customer& c1, const Customer& c2) {
+    return c1.getName() < c2.getName();
+  });
+\end{codebox}
+
+排序可能会出现以下输出:\par
+
+\begin{myOutput}
+MOVE TestCustomer -4 \\
+MOVEASSIGN TestCustomer -5 \\
+MOVEASSIGN TestCustomer -4 \\
+MOVE TestCustomer -3 \\
+MOVEASSIGN TestCustomer -5 \\
+MOVEASSIGN TestCustomer -4 \\
+MOVEASSIGN TestCustomer -3 \\
+MOVE TestCustomer -2 \\
+MOVEASSIGN TestCustomer -5 \\
+MOVEASSIGN TestCustomer -4 \\
+MOVEASSIGN TestCustomer -3 \\
+MOVEASSIGN TestCustomer -2 \\
+MOVE TestCustomer -1 \\
+MOVEASSIGN TestCustomer -5 \\
+MOVEASSIGN TestCustomer -4 \\
+MOVEASSIGN TestCustomer -3 \\
+MOVEASSIGN TestCustomer -2 \\
+MOVEASSIGN TestCustomer -1 \\
+MOVE TestCustomer 0 \\
+MOVEASSIGN TestCustomer 0 \\
+MOVE TestCustomer 1 \\
+MOVEASSIGN TestCustomer 1 \\
+MOVE TestCustomer 2 \\
+MOVEASSIGN TestCustomer 2 \\
+MOVE TestCustomer 3 \\
+MOVEASSIGN TestCustomer 3 \\
+MOVE TestCustomer 4 \\
+MOVEASSIGN TestCustomer 4 \\
+MOVE TestCustomer 5 \\
+MOVEASSIGN TestCustomer 5 \\
+MOVE TestCustomer 6 \\
+MOVEASSIGN TestCustomer 6 \\
+\end{myOutput}
+
+整个排序只有元素移动，有时是创建一个新的临时对象(MOVE)，有时是分配值到不同的位置(MOVEASSIGN)。\par
+
+同样，输出取决于\textit{sort()}的确切实现，这是特定于实现的。\par
+
+\mySmallsection{保存的副本数量}
+
+这个程序的输出再次证明了移动语义的好处。在支持移动语义前，我们只在插入和排序元素时有副本。然而，即使在这个有12个元素的小程序中，移动语义将44个拷贝转换成廉价的移动。对于1万名客户，我们将节省超过15万份拷贝。请注意，每个\textit{Customer}副本都意味着最多分配2个内存，稍后将进行相应的释放。\par
+
+请再次注意:\par
+
+\begin{itemize}
+  \item \textit{std::sort()}是特定于实现的，保存的副本数量可能不同。
+  \item 执行的唯一副本是由于重新分配vector用于存储元素的内存造成的。它们也应该使用移动操作，这将在关于移动语义的章节中讨论。
+\end{itemize}
+
+
+\section{特殊成员函数的规则}
+
+让我们来讨论一下特殊成员函数，特别是确切地指定何时以及如何生成特殊的复制和移动成员函数。\par
+
+\mySmallsection{3.3.1 特殊的成员函数}
+
+首先简单地看看特殊成员函数，因为它以不同的方式使用。C++标准将以下6种操作定义为特殊成员函数:\par
+
+\begin{itemize}
+  \item 默认构造函数
+  \item 复制构造函数
+  \item 复制赋值运算符
+  \item 移动构造函数(C++11)
+  \item 移动赋值操作符(C++11)
+  \item 析构函数
+\end{itemize}
+
+然而，在许多情况下，我们只讨论其中5个操作，因为默认构造函数与其他5个(或C++11之前的3个)操作略有不同。其他5个操作通常没有声明，并且具有更复杂的依赖关系。因此，请了解特殊成员函数的含义(到目前为止，我一直试图避免使用这个术语)。\par
+
+图3.1概述了什么时候会根据声明的构造函数和特殊成员函数，自动生成特殊成员函数:\par
+
+\textbf{图3.1 自动生成特殊成员函数的规则}\par
+
+\myGraphic{1.0}{images/chapter3/1}{}
+
+可以在这个表格中看到一些基本的规则:\par
+
+\begin{itemize}
+  \item 只有在没有用户声明其他构造函数的情况下，才会自动声明默认构造函数。
+  \item 特殊的复制成员函数和析构函数禁用了移动支持。自动生成特殊的移动成员函数是禁用的(除非也声明了移动操作)。但是，移动对象的请求通常是有效的，因为复制成员函数用作后备(除非特殊的移动成员函数显式删除)。
+  \item 特殊的移动成员函数禁用了正常的复制和赋值。复制和其他移动特殊成员函数将删除，这样只能移动(分配)对象，而不能复制(分配)对象(除非还声明了其他操作)。
+\end{itemize}
+
+\mySmallsection{3.3.2 默认情况下，有复制和移动}
+
+在默认编译情况下，为类生成复制和移动特殊成员函数。\par
+
+假设类\textit{Person}的声明如下:\par
+
+\begin{codebox}[cpp]
+class Person {
+  ...
+public:
+  ...
+  // NO copy constructor/assignment declared
+
+  // NO move constructor/assignment declared
+
+  // NO destructor declared
+};
+\end{codebox}
+
+这种情况下，\textit{Person}可以复制和移动:\par
+
+\begin{codebox}[cpp]
+std::vector<Person> coll;
+
+Person p{"Tina", "Fox"};
+coll.push_back(p); // OK, copies p
+coll.push_back(std::move(p)); // OK, moves p
+\end{codebox}
+
+\mySmallsection{3.3.3 已声明的复制禁用移动(启用退阶)}
+
+在声明复制特殊成员函数(或析构函数)时，禁用了移动特殊成员函数的自动生成:\par
+
+假设\textit{Person}的声明如下:\par
+
+\begin{codebox}[cpp]
+class Person {
+  ...
+public:
+  ...
+  // copy constructor/assignment declared:
+  Person(const Person&) = default;
+  Person& operator=(const Person&) = default;
+
+  // NO move constructor/assignment declared
+};
+\end{codebox}
+
+因为退阶机制是有效的，所以复制和移动\textit{Person}可以编译，但移动是作为复制执行的:\par
+
+\begin{codebox}[cpp]
+std::vector<Person> coll;
+
+Person p{"Tina", "Fox"};
+coll.push_back(p); // OK, copies p
+coll.push_back(std::move(p)); // OK, copies p
+\end{codebox}
+
+因此，用\textit{=default}声明一个特殊成员函数与根本不声明它是不同的。复制构造函数和复制赋值操作符是用户声明的，它禁用了移动构造和移动赋值，以便移动到副本。声明的析构函数具有相同的效果。\par
+
+您可能想知道为什么声明的析构函数会禁用移动语义。关于已移动状态那一章讨论了具体的例子，一个类的析构函数导致生成的移动语义不能正常工作。\par
+
+\mySmallsection{3.3.4 声明移动，禁用复制}
+
+如果声明了的移动语义，就禁用了复制语义。删除复制特殊成员函数。\par
+
+换句话说，如果移动构造函数或移动赋值操作符显式声明(使用\textit{=default}实现、生成，或使用\textit{=delete}禁用)，那么通过使用\textit{=delete}声明，就禁用了调用复制构造函数和复制赋值操作符。\par
+
+假设\textit{Person}的声明如下:\par
+
+\begin{codebox}[cpp]
+class Person {
+  ...
+  public:
+  ...
+  // NO copy constructor declared
+
+  // move constructor/assignment declared:
+  Person(Person&&) = default;
+  Person& operator=(Person&&) = default;
+};
+\end{codebox}
+
+本例中，我们有一个只移动类型。Person可以移动，但不能复制:\par
+
+\begin{codebox}[cpp]
+std::vector<Person> coll;
+
+Person p{"Tina", "Fox"};
+coll.push_back(p); // ERROR: copying disabled
+coll.push_back(std::move(p)); // OK, moves p
+
+coll.push_back(Person{"Ben", "Cook"}); // OK, moves temporary person into coll
+\end{codebox}
+
+同样，使用\textit{=default}声明特殊成员函数与根本不声明不同。调用的后果更加严重:复制对象的尝试将无法编译。\par
+
+支持移动操作但不支持复制操作的类是有意义的。可以使用这种只移动类型传递资源的所有权或句柄，而无需共享或复制。在C++标准库中也有一些只移动的类型(例如，输入输出流、线程和\textit{std::\allowbreak{}unique\_\allowbreak{}ptr<\allowbreak{}>})，详细信息请参见关于仅移动类型的章节。\par
+
+\mySmallsection{3.3.5 删除移动没有意义}
+
+出于同样的原因，如果将移动构造函数声明为\textit{delete}，则不能移动(已禁用此操作，没有使用任何退阶)和不能复制(因为声明的移动构造函数禁用了复制操作):\par
+
+\begin{codebox}[cpp]
+class Person {
+public:
+  ...
+  // NO copy constructor declared
+  // move constructor/assignment declared as deleted:
+  Person(Person&&) = delete;
+  Person& operator=(Person&&) = delete;
+  ...
+};
+
+Person p{"Tina", "Fox"};
+coll.push_back(p); // ERROR: copying disabled
+coll.push_back(std::move(p)); // ERROR: moving disabled
+\end{codebox}
+
+通过声明复制被删除的特殊成员函数，可以获得相同的效果，这可能不会让其他程序员感到困惑。\par
+
+删除移动操作和启用复制操作真的没有意义:\par
+
+\begin{codebox}[cpp]
+class Person {
+  public:
+  ...
+  // copy constructor explicitly declared:
+  Person(const Person& p) = default;
+  Person& operator=(const Person&) = default;
+
+  // move constructor/assignment declared as deleted:
+  Person(Person&&) = delete;
+  Person& operator=(Person&&) = delete;
+  ...
+};
+
+Person p{"Tina", "Fox"};
+coll.push_back(p); // OK: copying enabled
+coll.push_back(std::move(p)); // ERROR: moving disabled
+\end{codebox}
+
+这种情况下，\textit{=delete}禁用了退阶机制(因此也与根本不声明它不同)。编译器找到该声明并报告该调用为错误。\par
+
+支持复制但在调用移动时失败的类型没有任何意义。对于此类的用户，复制有时可行，有时不行。作为指导原则:永不\textit{=delete}特殊的移动成员函数。如果想要同时禁用复制和移动，删除复制的特殊成员函数就足够了。\par
+
+\mySmallsection{3.3.6 禁用移动语义与启用复制语义}
+
+基于我们刚才讨论的内容，现在知道了当复制仍然有意义时如何禁用移动语义。将特殊的移动成员函数声明为已删除通常不是正确的做法，因为它禁用了退阶机制。\par
+
+提供复制语义的同时，禁用移动语义的正确方法是，声明另一个特殊成员函数(复制构造函数、赋值操作符或析构函数)。我建议你使用默认复制构造函数和赋值操作符(声明其中一个就足够了，但可能会造成不必要的混淆):\par
+
+\begin{codebox}[cpp]
+class Customer {
+  ...
+public:
+  ...
+  Customer(const Customer&) = default; // disable move semantics
+  Customer& operator=(const Customer&) = default; // disable move semantics
+};
+\end{codebox}
+
+因为没有发现生成的特殊的移动成员函数，所以现在会复制临时的\textit{Customer}，甚至标记为\textit{std::move()}的\textit{Customer}对象:\par
+
+\begin{codebox}[cpp]
+std::vector<Customer> customers;
+...
+customers.push_back(createCustomer()); // OK, falls back to copying
+customers.push_back(std::move(customers[0])); // OK, falls back to copying
+\end{codebox}
+
+但是，通常最好是实现特殊的移动成员函数，来修复默认生成的移动操作所存在的任何问题。关于迁移状态的章节将讨论实践中的例子。\par
+
+请注意，只有声明特殊的复制成员函数才会违反“5规则”，我们将在后面详细讨论这个规则。必须声明特殊的复制成员函数，但也不能声明特殊的移动成员函数(删除和默认都不能工作，实现它们会使类变得复杂)。因此，如果显式地声明一个复制特殊成员函数只是为了禁用移动语义，请添加一个注释，以确保该声明不会被特殊移动成员函数的声明删除或扩展。\par
+
+\mySmallsection{3.3.7 为禁用移动语义的成员进行移动}
+
+如果某个类型的移动语义不可用或已被删除，则这不会影响具有此类型成员的类的移动语义的生成。生成的默认移动构造函数和赋值操作符逐个成员决定是复制还是移动它。如果移动不可能(即使移动操作被删除)，则生成一个副本(如果可能的话)。\par
+
+例如，以下类:\par
+
+\begin{codebox}[cpp]
+class Customer {
+  ...
+public:
+  ...
+  Customer(const Customer&) = default; // copying calls enabled
+  Customer& operator=(const Customer&) = default; // copying calls enabled
+  Customer(Customer&&) = delete; // moving calls disabled
+  Customer& operator=(Customer&&) = delete; // moving calls disabled
+};
+\end{codebox}
+
+如果这个类被另一个类中的成员使用:\par
+
+\begin{codebox}[cpp]
+class Invoice {
+  std::string id;
+  Customer cust;
+public:
+  ... // no special member functions
+};
+\end{codebox}
+
+生成的移动构造函数将移动\textit{id}字符串，但复制客户的\textit{cust}:\par
+
+\begin{codebox}[cpp]
+Invoice i;
+Invoice i1{std::move(i)}; // OK, moves id, copies cust
+\end{codebox}
+
+\mySmallsection{3.3.8 生成的特殊成员函数的规则}
+
+现在我们可以总结特殊成员函数的新规则(何时生成它们以及它们的行为方式)。\par
+
+例如，假设有以下派生类:\par
+
+\begin{codebox}[cpp]
+class MyClass : public Base
+{
+private:
+  MyType value;
+  ...
+};
+\end{codebox}
+
+这里缺少noexcept，我们将在后面关于noexcept的章节中介绍它，但我们会在这里提到相应的保证。\par
+
+\mySmallsection{复制构造函数}
+
+当应用以下所有内容时，将自动生成复制构造函数:\par
+
+\begin{itemize}
+  \item 用户没有声明移动构造函数
+  \item 用户没有声明移动赋值操作符
+\end{itemize}
+
+如果生成(隐式或使用\textit{=default})，复制构造函数具有以下行为:\par
+
+\begin{codebox}[cpp]
+MyClass(const MyClass& obj) noexcept-specifier
+: Base(obj), value(obj.value) {
+}
+\end{codebox}
+
+生成的复制构造函数，首先将源对象传递给基类的最佳匹配的复制构造函数。(记住，复制构造函数总是在自顶向下的基础上调用)。它倾向于使用具有相同声明的复制构造函数(通常声明为\textit{const\&})。如果不可用，可能会调用下一个最佳匹配的构造函数(例如，复制构造函数模板)。然后，复制类的所有成员(同样使用最佳匹配)。\par
+
+生成的复制构造函数声明为noexcept，除非所有复制操作(所有基类的复制构造函数和所有成员的复制构造函数)都有这个保证。\par
+
+\mySmallsection{移动构造函数}
+
+移动构造函数在应用以下所有条件时自动生成:\par
+
+\begin{itemize}
+  \item 用户没有声明复制构造函数
+  \item 用户没有声明复制赋值操作符
+  \item 用户没有声明移动赋值操作符
+  \item 用户没有声明析构函数
+\end{itemize}
+
+如果生成(隐式或使用\textit{=default})，移动构造函数具有以下行为:\par
+
+\begin{codebox}[cpp]
+MyClass(MyClass&& obj) noexcept-specifier
+: Base(std::move(obj)), value(std::move(obj.value)) {
+}
+\end{codebox}
+
+生成的移动构造函数首先传递源对象(标记为\textit{std::move()}来传递移动语义)，给基类最佳匹配的移动构造函数。最佳匹配的移动构造函数通常是具有相同声明(用\&\&声明)的构造函数。然而，如果这是不可用的，可能会调用下一个最佳匹配的构造函数(例如，移动构造函数模板，甚至复制构造函数)。然后，移动类的所有成员(同样使用最佳匹配)。\par
+
+生成的移动构造函数声明为noexcept，除非所有调用的移动/复制操作(所有基类的复制或移动构造函数，以及所有成员的复制或移动构造函数)都保证了这一点。\par
+
+\mySmallsection{复制赋值运算符}
+
+复制赋值操作符在应用以下所有条件时自动生成:\par
+
+\begin{itemize}
+  \item 用户没有声明移动构造函数
+  \item 用户没有声明移动赋值操作符
+\end{itemize}
+
+如果生成(隐式或使用\textit{=default})，复制赋值操作符大致具有以下行为:
+
+\begin{codebox}[cpp]
+MyClass& operator= (const MyClass& obj) noexcept-specifier {
+  Base::operator=(obj); // - perform assignments for base class members
+  value = obj.value; // - assign new members
+  return *this;
+}
+\end{codebox}
+
+生成的复制赋值操作符，首先对传递的源对象调用基类的最佳匹配赋值操作符(记住，与复制构造函数相比，赋值操作符不是自上而下调用的;它们在实现中调用基类赋值操作符)。然后，为其类的成员进行分配(同样使用最佳匹配)。\par
+
+注意，生成的赋值操作符不会检查对象对自赋值。如果这很重要，必须自己实现操作符。\par
+
+此外，生成的复制赋值操作符声明为noexcept，除非所有赋值操作(基类成员的赋值和新成员的赋值)都给出了这个保证。\par
+
+\mySmallsection{移动赋值操作符}
+
+移动赋值操作符在以下所有条件都适用时自动生成:\par
+
+\begin{itemize}
+  \item 用户没有声明复制构造函数
+  \item 用户没有声明移动构造函数
+  \item 用户没有声明复制赋值操作符
+  \item 用户没有声明析构函数
+\end{itemize}
+
+如果生成(隐式或使用\textit{=default})，移动赋值操作符大致具有以下行为:\par
+
+\begin{codebox}[cpp]
+MyClass& operator= (MyClass&& obj) noexcept-specifier {
+  Base::operator=(std::move(obj)); // - perform move assignments for base class members
+  value = std::move(obj.value); // - move assign new members
+  return *this;
+}
+\end{codebox}
+
+生成的移动赋值操作符，首先为传递的源对象调用基类的最佳匹配的移动赋值操作符，用\textit{std::move()}标记来传递移动语义。然后它移动分配它的类的所有成员(同样使用最佳匹配)。\par
+
+你可能想知道，为什么在源对象标记为\textit{std::move()}之后，我们仍然使用对象obj的成员:\par
+
+\begin{codebox}[cpp]
+Base::operator=(std::move(obj)); // - perform move assignments for base class members
+\end{codebox}
+
+本例中，将对象标记为基类的特定上下文，基类不能看到在该类中引入的成员。因此，派生成员具有有效但未定义的状态，但仍然可以使用新成员的值。\par
+
+生成的赋值操作符也不会检查对象对自赋值。因此，在默认行为中，操作符将把每个成员都赋值给自身，这通常意味着成员接收一个有效但未定义的值。如果这很重要，需要自己实现操作符。\par
+
+此外，生成的移动赋值操作符被声明为noexcept，除非所有调用的赋值操作(基类成员的赋值和新成员的赋值)都保证了这一点。\par
+
+\mySmallsection{其他特殊成员函数}
+
+其他特殊成员函数对移动语义没有那么重要的作用:\par
+
+\begin{itemize}
+  \item 析构函数对于移动语义没有什么特别之处，除了声明禁用了移动操作的自动生成。
+  \item 如果没有声明其他构造函数，默认构造函数(“不那么特殊”的特殊成员函数)仍然会自动生成。也就是说，移动构造函数的声明禁用了默认构造函数的生成。
+\end{itemize}
+
+但请注意，当谈到已移动状态时，这些特殊的成员函数发挥了作用。默认构造函数的状态通常是已移动对象的“自然”状态，而已移动对象是可销毁的。\par
+
+
+\section{三五法则}
+
+是否自动生成或自动生成哪个特殊成员函数取决于刚才的规则，许多开发者并不知道这些规则。因此，即使在C++11之前，指导方针是不提供任何或所有用于复制、赋值和销毁的特殊成员函数。\par
+
+\begin{itemize}
+  \item C++11之前，这条原则称为“3法则”:要么声明全部三种(复制构造函数、赋值操作符和析构函数)，要么一个都不声明。
+  \item 从C++11开始，该规则就变成了“5法则”，通常的表述方式是:要么声明所有5种(复制构造函数、移动构造函数、复制赋值操作符、移动赋值操作符和析构函数)，要么一个都不声明。
+\end{itemize}
+
+在这里，声明的意思是:\par
+
+\begin{itemize}
+  \item 要么实现 (\{...\})
+  \item 或者声明为默认 (=default)
+  \item 或声明为已删除 (=delete)
+\end{itemize}
+
+当其中一个特殊成员函数被实现、默认或删除时，应该同时实现、默认或删除所有其他四个特殊成员函数。\par
+
+但是，您应该注意这条规则。我建议更多地把它作为一个指导方针，当其中一个特殊成员函数是用户声明的时候，仔细考虑这5个特殊成员函数。\par
+
+为了只启用复制语义，应该使用默认复制特殊成员函数，而不声明特殊的移动成员函数(删除和默认特殊移动成员函数是行不通的，实现它们会使类变得复杂)。如果生成的移动语义创建了无效状态，则建议使用此选项，我们将在关于无效已移动状态的章节中讨论这一点。\par
+
+当应用5规则时，有时开发者使用它来为新的移动操作添加声明，却不理解这意味着什么。开发者只是用=default来声明移动操作，因为已经实现了复制操作，所以他们希望遵循5规则。\par
+
+因此，我通常教授的“5法则”或“3法则”是:\par
+
+\begin{itemize}
+  \item 如果声明了复制构造函数、移动构造函数、复制赋值操作符、移动赋值操作符或析构函数，则必须仔细考虑如何处理其他特殊成员函数。
+  \item 如果不理解移动语义，只考虑复制构造函数、复制赋值操作符和析构函数(如果声明其中之一)。如果有疑问，可以使用=default声明复制特殊成员函数来禁用移动语义。
+\end{itemize}
+
+
+\section{总结}
+
+\begin{itemize}
+  \item 移动语义不可传递。
+  \item 对于每个类，移动构造函数和移动赋值操作符都是自动生成的(除非没有办法这样做)。
+  \item 用户声明复制构造函数、复制赋值操作符或析构函数将禁用类中对移动语义的自动支持。这不会影响派生类中的支持。
+  \item 用户声明一个移动构造函数或移动赋值操作符将禁用类中对复制语义的自动支持，将得到的是只移动类型(除非这些特殊的移动成员函数删除)。
+  \item 永远不要=delete特殊的移动成员函数。
+  \item 如果没有特定的需要，不要声明析构函数。从多态基类派生的类也一样，没有特殊需要，不要声明析构函数。
+\end{itemize}

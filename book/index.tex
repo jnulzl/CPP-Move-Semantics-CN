@@ -1,0 +1,36 @@
+% book/index.tex —— 封面、目录与全书章节索引
+% 由 tools/convert.py 自动生成：增删章节请改原 C++-Move-Semantics.tex 后重新运行
+
+\myFrontNoToc{content/front/00-cover}
+\myFrontNoToc{content/front/00-title}
+
+\newpage
+\thispagestyle{empty}
+\tableofcontents
+\newpage
+
+\myFront{前言}{content/front/01-preface}
+\myFront{关于本书}{content/front/02-about}
+\myFront{本书概述}{content/front/03-blurb}
+
+\myPart{I}{移动语义的基本特征}{content/part/part1}
+
+\myChapter{1}{移动语义的力量}{content/main/01}
+\myChapter{2}{移动语义的核心}{content/main/02}
+\myChapter{3}{类中的移动语义}{content/main/03}
+\myChapter{4}{如何从移动语义中获益}{content/main/04}
+\myChapter{5}{引用的重载}{content/main/05}
+\myChapter{6}{已移动状态}{content/main/06}
+\myChapter{7}{移动语义和noexcept}{content/main/07}
+\myChapter{8}{值的种类}{content/main/08}
+\myPart{II}{泛型代码中的移动语义}{content/part/part2}
+
+\myChapter{9}{完美转发}{content/main/09}
+\myChapter{10}{完美转发的细节}{content/main/10}
+\myChapter{11}{用auto\&\&完美传递}{content/main/11}
+\myChapter{12}{完美返回decltype(auto)}{content/main/12}
+\myPart{III}{C++标准库中的移动语义}{content/part/part3}
+
+\myChapter{13}{只移动类型}{content/main/13}
+\myChapter{14}{移动算法和迭代器}{content/main/14}
+\myChapter{15}{C++标准库类型中的移动语义}{content/main/15}
