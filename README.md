@@ -16,29 +16,22 @@
 ```
 CPP-Move-Semantics/                # 本目录即工程根
 ├── main.tex                       # 编译入口：\input{book/ccs.tex} + \subfile{book/index.tex}
-├── build.bat / build.sh           # 一键编译：三遍 xelatex，成功后清理 *.minted 缓存
-├── main.pdf                       # 编译成品（252 页）
+├── build.bat                      # 一键编译：三遍 xelatex，成功后清理 *.minted 缓存
+├── main.pdf                       # 编译成品（246 页）
 ├── images/                        # 插图：按章分子目录 images/chapterN/ + cover.png
-├── tools/
-│   └── convert.py                 # 片段 → 一章一文件 的转换器（同时生成 book/index.tex）
 ├── book/
 │   ├── ccs.tex                    # 导言区：字体/版式/自定义命令与环境、minted v3 缓存配置
-│   ├── index.tex                  # 封面、目录、部/章装配（由 tools/convert.py 生成，勿手改）
+│   ├── index.tex                  # 封面、目录、部/章装配（勿手改）
 │   ├── manning-pygments-style.tex # 代码高亮配色（原书配色）
 │   └── content/
 │       ├── front/                 # 00-cover(封面图) / 00-title(扉页) / 01-preface / 02-about / 03-blurb
 │       ├── part/                  # 三部分部引言（part1–part3）
 │       └── main/                  # 第 1–15 章：01.tex … 15.tex（一章一文件）
-├── content/                       # 【原始片段式译稿】content/1/chapter1/1.tex 之类，仅作转换输入
-├── C++-Move-Semantics.tex         # 【原主文件】部/章/节结构与标题的来源
-├── cover.png                      # 原封面（转换时复制到 images/cover.png）
 └── fonts/                         # 备选等宽字体（JetBrains Mono NL，当前版式未启用）
 ```
 
 > 正文源文件必须放 `book/content/` 下：`\subfile` 的相对基准是 `book/`，图片路径仍写
 > `images/...`（相对工程根，`\graphicspath{{images/}{./}}`）。
-> `content/`、`C++-Move-Semantics.tex`、`cover.png` 是原始素材，只被 `tools/convert.py` 读取，
-> 不参与编译。
 
 ---
 
@@ -62,10 +55,6 @@ CPP-Move-Semantics/                # 本目录即工程根
 build.bat          :: 三遍 xelatex，成功后删除 *.minted 缓存
 ```
 
-```bash
-bash build.sh      # 同上（Git Bash / MSYS 环境；本机需用 /usr/bin/bash build.sh）
-```
-
 手动编译时**必须**把 minted 缓存目录指成绝对路径（见「已知坑」第 2 条）：
 
 ```bash
@@ -81,7 +70,22 @@ xelatex -shell-escape -interaction=nonstopmode -synctex=1 main.tex   # 跑三遍
 - **必须三遍**：目录、书签、交叉引用要收敛；封面用 `remember picture` 定位，两遍才到位。
 - 首次编译较慢（minted 逐个高亮 447 个代码块），改稿期可反复跑第二、三遍。
 - 排错时给 `xelatex` 加 `-file-line-error`，可直接定位到文件与行号。
-- 产物：`main.pdf`（252 页）、`main.aux`、`main.toc`、`main.log`、`main.synctex.gz`。
+- 产物：`main.pdf`（246 页）、`main.aux`、`main.toc`、`main.log`、`main.synctex.gz`。
+
+---
+
+## 插图写法
+
+```latex
+\myGraphic{0.8}{images/chapter1/5}{}              % 无图注：图片后面不留空行
+\myGraphic{0.8}{images/chapter1/5}{图注文字}      % 有图注：8bp 粗体，与正文同宽
+```
+
+- 第一个参数是 `\linewidth` 的倍数（用 `\linewidth` 而非 `\textwidth`，插图放在
+  itemize/enumerate 里也不会溢出）。
+- 第三个参数为空（或只有空格）时，整个图注块被跳过，不会再排出那个 10.5bp 的空行盒。
+- 图注左缘默认与正文左缘齐平；想悬挂到页边距，把 `book/ccs.tex` 里的
+  `\myGraphicCapHang` 从 `0bp` 改成 `36bp`。
 
 ---
 

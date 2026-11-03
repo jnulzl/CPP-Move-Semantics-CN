@@ -319,14 +319,20 @@
     % 列表项的可用宽度比版心小（每层 2em），用 \textwidth 会稳定溢出 20/40bp
     \includegraphics[width=#1\linewidth,height=0.86\textheight,keepaspectratio]{#2}
   \end{center}
-  \nopagebreak\vspace{3bp}\noindent
-  {\fontsize{8bp}{10.5bp}\selectfont
-   \ifmyGraphicCapBold\bfseries\fi
-   \ifmyGraphicCapCenter
-     \parbox{\linewidth}{\centering #3}%
-   \else
-     \hspace*{-\myGraphicCapHang}\parbox{\dimexpr\linewidth+\myGraphicCapHang\relax}{#3}%
-   \fi}\par
+  % 【无图注】第 3 个参数为 {}（或只有空格）时，整段图注不再排：
+  % 原来无条件排 \parbox{...}{} 会留下一个 10.5bp 高的空行盒 + 3bp 间距，
+  % 看上去就是图片后面莫名多出一道空白。本书 46 张插图目前都没有图注。
+  \tl_if_blank:nF {#3}
+    {
+      \nopagebreak\vspace{3bp}\noindent
+      {\fontsize{8bp}{10.5bp}\selectfont
+       \ifmyGraphicCapBold\bfseries\fi
+       \ifmyGraphicCapCenter
+         \parbox{\linewidth}{\centering #3}%
+       \else
+         \hspace*{-\myGraphicCapHang}\parbox{\dimexpr\linewidth+\myGraphicCapHang\relax}{#3}%
+       \fi}\par
+    }
   \medskip
 }
 \ExplSyntaxOff

@@ -74,15 +74,15 @@ COPY Ludwig van Beethoven
 
 首先，将初始值复制到vector中(容器的std::initializer\_list<>构造函数按值接受传递的参数)。因此，vector通常为三个元素分配内存:\par
 
-\myGraphic{1.0}{images/chapter7/1}{}
+\myGraphic{0.85}{images/chapter7/1}{}
 
 接下来会发生什么:用push\_back()插入第四个元素，结果如下:\par
 
 \begin{itemize}
   \item vector在内部需要更多内存，所以会分配新的内存(比如，6个元素)，移动第4个字符串(创建一个临时的\textit{Person}并使用\textit{push\_\allowbreak{}back(\allowbreak{})\allowbreak{}}方法将其移动到vector中)，但也会将现有的元素复制到新内存中:\par
-\myGraphic{1.0}{images/chapter7/2}{}
+\myGraphic{0.9}{images/chapter7/2}{}
   \item 这个操作结束时，vector销毁旧的元素，释放这些元素的旧内存，并更新成员:\par
-\myGraphic{1.0}{images/chapter7/3}{}
+\myGraphic{0.9}{images/chapter7/3}{}
 \end{itemize}
 
 问题是，为什么vector不使用移动构造函数，将元素从旧内存移动到新内存呢?\par
@@ -165,15 +165,15 @@ MOVE Ludwig van Beethoven
 
 同样，首先将初始值复制到vector中\par
 
-\myGraphic{1.0}{images/chapter7/4}{}
+\myGraphic{0.9}{images/chapter7/4}{}
 
 然而，随着输出的最后三行可视化，vector现在使用移动构造函数将元素移动到新的重新分配的内存中:\par
 
-\myGraphic{1.0}{images/chapter7/5}{}
+\myGraphic{0.9}{images/chapter7/5}{}
 
 最后，vector只需要释放旧内存并更新其成员:\par
 
-\myGraphic{1.0}{images/chapter7/6}{}
+\myGraphic{0.9}{images/chapter7/6}{}
 
 \mySmallsection{具有条件的noexcept声明}
 
